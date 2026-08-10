@@ -34,6 +34,11 @@ SOURCE_BLOBS = {
     "adapters/default/codex/agents/test-scout.toml": "617749ab79722162e9ac985b3459190d8d673ccc",
 }
 
+# V6 may add roles without modifying the frozen V4.1 security/config blobs above.
+ADDITIVE_V6_CODEX_ROLES = {
+    "memory_scout.toml",
+}
+
 SKILLS = (
     "architecture-health-check",
     "change-governor",
@@ -135,6 +140,10 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
                     f".codex/agents/{Path(path).name}"
                     for path in SOURCE_BLOBS
                     if "/agents/" in path
+                },
+                *{
+                    f".codex/agents/{name}"
+                    for name in ADDITIVE_V6_CODEX_ROLES
                 },
                 *{f".agents/skills/{name}/SKILL.md" for name in SKILLS},
                 *{
