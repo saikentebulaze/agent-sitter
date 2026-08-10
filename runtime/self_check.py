@@ -35,6 +35,7 @@ def core_required_assets(context: ProjectContext) -> tuple[Path, ...]:
         context.package_root / "runtime" / "decision_authority.py",
         context.package_root / "runtime" / "active_task_index.py",
         context.package_root / "runtime" / "session_context.py",
+        context.package_root / "runtime" / "session_start_hook.py",
         context.package_root / "runtime" / "memory_context.py",
         context.package_root / "runtime" / "memory_scout_once.py",
         context.package_root / "runtime" / "harness.py",
