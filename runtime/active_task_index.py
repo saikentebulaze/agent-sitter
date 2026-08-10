@@ -79,10 +79,27 @@ def register_active_task(context: ProjectContext, task_root: Path) -> None:
     _write(context, data)
 
 
-def unregister_active_task(context: ProjectContext, task_id: str) -> None:
+def _task_id_from_value(context: ProjectContext, value: str | Path) -> str:
+    raw = Path(value)
+    path = raw.resolve() if raw.is_absolute() else (context.project_root / raw).resolve()
+    task_file: Path | None = None
+    if path.is_dir() and (path / "task.yaml").is_file():
+        task_file = path / "task.yaml"
+    elif path.is_file() and path.name == "task.yaml":
+        task_file = path
+    if task_file is not None:
+        task = load_yaml(task_file)
+        resolved = str(task.get("id") or "").strip()
+        if resolved:
+            return resolved
+    return str(value).strip()
+
+
+def unregister_active_task(context: ProjectContext, task_id: str | Path) -> None:
+    resolved_id = _task_id_from_value(context, task_id)
     data = load_active_task_index(context)
     tasks = data["tasks"]
-    filtered = [item for item in tasks if str(item.get("id") or "") != task_id]
+    filtered = [item for item in tasks if str(item.get("id") or "") != resolved_id]
     if len(filtered) == len(tasks):
         return
     data["tasks"] = filtered
