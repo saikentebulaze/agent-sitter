@@ -8,6 +8,23 @@ from project_context import ProjectContext
 from providers.codex.profiles import load_native_agent_profile
 
 
+_SESSION_START_HOOK = r'''
+
+# V6 bounded cross-session continuity. The source config remains the frozen
+# V4.1 security baseline; this managed projection adds only SessionStart state.
+[[hooks.SessionStart]]
+matcher = "^(startup|resume|clear|compact)$"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = '/usr/bin/env python3 "$(git rev-parse --show-toplevel)/.harness/sitter/runtime/session_start_hook.py"'
+command_windows = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$root = (& git rev-parse --show-toplevel).Trim(); & python (Join-Path $root ''.harness\sitter\runtime\session_start_hook.py'')"'
+timeout = 5
+statusMessage = "Loading bounded Sitter task continuity"
+additionalContextLimit = 1000
+'''
+
+
 def entrypoint_text() -> str:
     return f"""<!-- {MARKER}; do not edit. -->
 # Sitter Harness entrypoint
@@ -19,7 +36,10 @@ Read `.harness/{PACKAGE_NAME}/adapters/default/bootstrap/AGENTS.md.template` as 
 
 
 def toml_text(source: Path) -> str:
-    return f"# {MARKER}; do not edit.\n" + source.read_text(encoding="utf-8")
+    text = f"# {MARKER}; do not edit.\n" + source.read_text(encoding="utf-8")
+    if source.name == "config.toml":
+        text += _SESSION_START_HOOK
+    return text
 
 
 def agent_toml_text(context: ProjectContext, source: Path) -> str:
