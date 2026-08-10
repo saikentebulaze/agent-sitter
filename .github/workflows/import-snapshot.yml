@@ -1,0 +1,45 @@
+name: Import Sitter 1.0 snapshot
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.repository == 'saikentebulaze/agent-sitter'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download verified snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/snapshot"
+          curl -L --fail --retry 3 \
+            'https://sdmntprwestus2.oaiusercontent.com/files/00000000-69e4-81f8-992f-416405804acd/raw?se=2026-08-10T09%3A33%3A29Z&sp=r&sv=2026-02-06&sr=b&scid=5da2c003-42bb-5988-a397-165eec596717&skoid=2d2fbb03-9efb-4ad0-a91c-1db2f5a47997&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-10T01%3A58%3A53Z&ske=2026-08-11T01%3A58%3A53Z&sks=b&skv=2026-02-06&sig=CaRlmaoXhH0cwFPZHzEKOEfO%2BUYi%2Bpo9G8hhI7otdAA%3D' \
+            -o "$RUNNER_TEMP/snapshot.zip"
+          echo 'cdffc5d4856f9f3ba7295ccf5f29c84233bfd8b69b26f0139646d6f62e21877f  '"$RUNNER_TEMP/snapshot.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/snapshot.zip" -d "$RUNNER_TEMP/snapshot"
+      - name: Import source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/snapshot"
+          if [ -d "$src/agent-sitter" ]; then
+            src="$src/agent-sitter"
+          fi
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude '.github/workflows/import-snapshot.yml' \
+            --exclude '.github/workflows/harness-tests.yml' \
+            "$src/" ./
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Import Sitter 1.0 public snapshot'
+          git push origin HEAD:main
