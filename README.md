@@ -6,13 +6,52 @@
 
 Sitter is a governance harness for coding agents working in complex repositories. It keeps low-risk work lightweight and adds investigation, read-only scouting, evidence, review, test hygiene, and human decision gates only as risk increases.
 
-Sitter currently supports **OpenAI Codex** and **Claude Code** through a provider-neutral governance core.
+## Core Goals
 
-## Why Sitter
+Sitter exists to improve the effectiveness of coding Agents without replacing the engineer who is responsible for the system.
 
-Coding agents are fast. In mature codebases, the dangerous failure mode is often not invalid syntax but a locally plausible change that silently degrades architecture, skips important context, leaves temporary tests behind, or cannot prove how it was produced.
+Its long-term design is centered on two core goals.
 
-Sitter adds structure where it matters without turning every small edit into a ceremony.
+### 1. Context Capability
+
+Improve the Agent's ability to obtain the **right, sufficiently complete, and current context** before making engineering conclusions or modifying a repository.
+
+This includes:
+
+- within-task context expansion through focused independent Agents such as Locator, Context Scout, Test Scout, and Framework Scout;
+- cross-session continuity through compact Task state, durable project knowledge, useful unfinished threads, and other high-value historical context.
+
+Sitter prefers:
+
+- progressive disclosure over eager loading;
+- bounded independent exploration over indiscriminate repository scanning;
+- distilled project state over conversation transcripts;
+- current repository state over historical memory when they disagree;
+- version-aware historical context whose freshness can be checked.
+
+The objective is not maximum context volume. The objective is maximizing the probability that important context is present while irrelevant or stale context stays out.
+
+### 2. Human Decision Authority
+
+Agents investigate, collect evidence, run experiments, compare alternatives, explain trade-offs, and recommend options.
+
+For material engineering forks where evidence does not determine one objectively correct answer, the engineer retains final authority.
+
+Examples include:
+
+- algorithm or numerical semantics;
+- state ownership and lifecycle;
+- sign, unit, coordinate, or result interpretation;
+- compatibility and fallback behavior;
+- responsibility boundaries;
+- precision versus performance;
+- architecture choices with multiple valid alternatives.
+
+Explicit user decisions become authoritative project state. Subsequent Design, Change, Implementation, Verification, Review, and durable Knowledge must remain consistent unless the decision is explicitly reconsidered.
+
+Human Decision Authority does not mean constant interruption. Routine deterministic LOW-risk work remains fast and autonomous.
+
+These goals are design invariants. New mechanisms, Agents, Hooks, memory features, and governance rules should primarily justify themselves by improving one of these two goals without materially degrading LOW Fast Path behavior.
 
 ## What it does
 
@@ -26,168 +65,7 @@ Sitter adds structure where it matters without turning every small edit into a c
 - Transactional install/update behavior with rollback on failure.
 - Runtime attestation for governed Codex and Claude executions.
 
-## Architecture
+## V6 Development
 
-```text
-Sitter
-├─ Governance Core
-│  ├─ Task / Investigation / Change
-│  ├─ Risk / Evidence / Decision
-│  ├─ Delegation / Review / Learning
-│  └─ Provider-neutral contracts
-└─ Runtime Providers
-   ├─ Codex
-   └─ Claude Code
-```
+V6 begins with behavior benchmarks before implementation. See [`docs/V6-Behavior-Benchmark.md`](docs/V6-Behavior-Benchmark.md).
 
-Codex and Claude can coexist in one repository, but one Task is bound to one orchestrator provider. Sitter does not transfer a Task between providers or mix Codex and Claude orchestration inside the same Task.
-
-## Install
-
-Requirements:
-
-- Python 3.12+
-- `PyYAML`
-- Git
-- Codex and/or Claude Code when using the corresponding provider
-
-Install the Python dependency:
-
-```bash
-python -m pip install PyYAML
-```
-
-Always pass the exact Git repository or worktree root as `<project-root>`.
-
-### Codex-only
-
-A fresh install defaults to Codex-only:
-
-```bash
-python install.py --project <project-root> --dry-run
-python install.py --project <project-root> --trust-project
-python check.py --project <project-root>
-```
-
-### Claude-only
-
-```bash
-python install.py --project <project-root> --provider claude --dry-run
-python install.py --project <project-root> --provider claude
-python check.py --project <project-root>
-```
-
-### Codex + Claude
-
-```bash
-python install.py --project <project-root> --provider codex --provider claude --trust-project --dry-run
-python install.py --project <project-root> --provider codex --provider claude --trust-project
-python check.py --project <project-root>
-```
-
-Run the installed self-check after installation:
-
-```bash
-python <project-root>/.harness/sitter/runtime/self_check.py --project <project-root>
-```
-
-See [`docs/local-update-and-sharing.md`](docs/local-update-and-sharing.md) for installation ownership, updates, worktrees, and drift handling.
-
-## What Sitter writes
-
-Depending on enabled providers, Sitter projects generated files such as:
-
-```text
-AGENTS.md
-.codex/config.toml
-.codex/agents/*.toml
-.agents/skills/*/SKILL.md
-CLAUDE.local.md
-.claude/agents/*.md
-.claude/skills/*/SKILL.md
-.claude/hooks/governance-runtime-hook.py
-.harness/sitter/
-```
-
-These are managed installation artifacts and are recorded in the installation manifest.
-
-The following are durable project or user state and are **not** replaced as part of a Sitter update:
-
-```text
-.agent-work/
-changes/
-knowledge/
-.claude/settings.local.json
-.harness/sitter.models.local.yaml
-production source code and user-owned files
-```
-
-Sitter refuses to silently overwrite an unverified user-owned projection.
-
-## Roles and skills
-
-Read-only / review agent roles:
-
-- `source-locator`
-- `context-scout`
-- `framework-scout`
-- `test-scout`
-- `maintainer-reviewer`
-- `deep-reviewer`
-
-Governance skills:
-
-- `change-governor`
-- `architecture-health-check`
-- `decision-grill`
-- `maintainer-handoff`
-
-The product is called **Sitter**; internal governance concepts intentionally use neutral engineering names rather than `sitter-*` prefixes.
-
-## Model profiles
-
-Default provider/model profiles live in:
-
-```text
-adapters/default/model-profiles.yaml
-```
-
-Per-project overrides live in:
-
-```text
-.harness/sitter.models.local.yaml
-```
-
-Provider-neutral grades are mapped by each provider to native selectors.
-
-## Validation
-
-Run the full test suite:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-The CI matrix runs on Ubuntu and Windows. Windows CI also parses the PowerShell acceptance scripts and runs the Codex static regression from outside the Sitter working directory.
-
-## Documentation
-
-Useful design and operating references:
-
-- [`docs/V5-Provider架构重构说明.md`](docs/V5-Provider架构重构说明.md) — provider-neutral architecture.
-- [`docs/V5-B-Claude-Code-Provider-Design.md`](docs/V5-B-Claude-Code-Provider-Design.md) — Claude Code provider design.
-- [`docs/V5-B-Model-Profiles.md`](docs/V5-B-Model-Profiles.md) — model-profile configuration.
-- [`docs/delegation-context.md`](docs/delegation-context.md) — delegation/context contracts.
-- [`docs/dynamic-risk-behavior-optimization.md`](docs/dynamic-risk-behavior-optimization.md) — adaptive risk behavior.
-- [`docs/v4-work-graph.md`](docs/v4-work-graph.md) — governed work graph.
-- [`docs/review-recording.md`](docs/review-recording.md) — review recording.
-
-Reusable acceptance templates remain under `docs/acceptance/`; private development transcripts and dated internal acceptance reports are intentionally not part of the public release.
-
-## Scope
-
-Sitter 1.0 supports Codex and Claude Code. It intentionally does not provide Kimi Code, OpenCode, Pi, cross-provider Task transfer, or mixed-provider orchestration within one Task.
-
-## License
-
-Apache License 2.0. See [`LICENSE`](LICENSE).
