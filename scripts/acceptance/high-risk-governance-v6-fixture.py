@@ -6,6 +6,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = HARNESS_ROOT / "runtime"
@@ -29,6 +31,32 @@ def project(root: Path, name: str) -> Path:
     lock.parent.mkdir(parents=True)
     lock.write_text("package: sitter\nformat_version: 1\n", encoding="utf-8")
     return path
+
+
+def _seed_accepted_decision(project: Path, task: str) -> None:
+    """Seed the pivot precondition without exercising the decision transaction.
+
+    G1 probes accepted-decision and pivot-to-change as separate final-truth
+    boundaries. Once accepted-decision is correctly blocked, the pivot probe
+    still needs an otherwise-valid accepted decision to test its own gate.
+    """
+
+    path = project / ".agent-work" / task / "investigations" / "inv-001.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data.setdefault("decisions", []).append(
+        {
+            "id": "dec-001",
+            "statement": "Change planner state ownership.",
+            "basis": {"claims": ["clm-001"], "evidence": ["evd-001"]},
+            "status": "accepted",
+            "requires_human": False,
+            "evidence_ref": None,
+        }
+    )
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def prepare(root: Path, name: str, *, accepted: bool) -> tuple[Path, str]:
@@ -114,27 +142,7 @@ def prepare(root: Path, name: str, *, accepted: bool) -> tuple[Path, str]:
         raise RuntimeError(claim.stderr)
 
     if accepted:
-        decision = run(
-            p,
-            "work.py",
-            "--project",
-            str(p),
-            "record-decision",
-            task,
-            "inv-001",
-            "--id",
-            "dec-001",
-            "--statement",
-            "Change planner state ownership.",
-            "--status",
-            "accepted",
-            "--claim",
-            "clm-001",
-            "--evidence",
-            "evd-001",
-        )
-        if decision.returncode:
-            raise RuntimeError(decision.stderr)
+        _seed_accepted_decision(p, task)
     return p, task
 
 
