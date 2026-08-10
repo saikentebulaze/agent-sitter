@@ -18,7 +18,7 @@ matcher = "^(startup|resume|clear|compact)$"
 [[hooks.SessionStart.hooks]]
 type = "command"
 command = '/usr/bin/env python3 "$(git rev-parse --show-toplevel)/.harness/sitter/runtime/session_start_hook.py"'
-command_windows = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$root = (& git rev-parse --show-toplevel).Trim(); & python (Join-Path $root ''.harness\sitter\runtime\session_start_hook.py'')"'
+command_windows = '''powershell -NoProfile -ExecutionPolicy Bypass -Command "$root = (& git rev-parse --show-toplevel).Trim(); & python (Join-Path $root '.harness/sitter/runtime/session_start_hook.py')"'''
 timeout = 5
 statusMessage = "Loading bounded Sitter task continuity"
 additionalContextLimit = 1000
