@@ -23,7 +23,10 @@
         "id": {"type": "string", "minLength": 1},
         "title": {"type": "string", "minLength": 1},
         "type": {
-          "enum": ["fact", "flow", "decision", "debt", "critical-surface", "glossary"]
+          "enum": [
+            "fact", "flow", "decision", "debt", "critical-surface", "glossary",
+            "open-thread", "watchpoint"
+          ]
         },
         "evidence_status": {"enum": ["candidate", "verified", "disputed"]},
         "architecture_status": {"enum": ["current", "target", "transitional", "legacy"]},
@@ -33,7 +36,15 @@
         "related": {"type": "array", "items": {"type": "string"}},
         "reviewed_by": {"type": "string"},
         "reviewed_at": {"type": "string"},
-        "source_change": {"type": "string"}
+        "source_change": {"type": "string"},
+        "source_task": {"type": "string"},
+        "source_commit": {"type": "string", "minLength": 7},
+        "validity_surface": {"type": "array", "items": {"type": "string"}},
+        "memory_key": {"type": "string", "minLength": 1},
+        "supersedes": {"type": "array", "items": {"type": "string"}},
+        "trigger_terms": {"type": "array", "items": {"type": "string"}},
+        "trigger_condition": {"type": "string"},
+        "authority_sha256": {"type": "string", "minLength": 12}
       },
       "additionalProperties": false
     }
