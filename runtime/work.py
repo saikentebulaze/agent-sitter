@@ -26,18 +26,13 @@ from governed_work import (
     record_decision,
     record_evidence,
     record_model_review,
-    refresh_status,
     request_model_review,
     resolve_human_checkpoint,
 )
 from project_context import resolve_project_context
 from risk_transaction import RiskTransactionError, reassess_task_risk
-from work_graph import (
-    WorkGraphError,
-    graph_summary,
-    render_status_markdown,
-    resolve_task_root,
-)
+from task_status import build_action_dashboard
+from work_graph import WorkGraphError, resolve_task_root
 
 
 def fail(message: str) -> None:
@@ -276,15 +271,10 @@ def main() -> None:
             if args.command == "validate":
                 print("work_graph: valid")
             else:
-                markdown = render_status_markdown(context, graph)
-                output = refresh_status(context, task_root, markdown)
                 print(
                     json.dumps(
-                        graph_summary(context, graph), ensure_ascii=False, indent=2
+                        build_action_dashboard(graph), ensure_ascii=False, indent=2
                     )
-                )
-                print(
-                    f"status_ref: {output.relative_to(context.project_root).as_posix()}"
                 )
         elif args.command == "reassess-risk":
             current, peak, assurance_change = reassess_task_risk(
