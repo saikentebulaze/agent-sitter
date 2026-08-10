@@ -1,0 +1,64 @@
+name: Harness tests
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check PyYAML
+      - name: Run Harness tests
+        run: python -m unittest discover -s tests -v
+      - name: Parse PowerShell acceptance scripts
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $scripts = @(
+            '.\scripts\install-or-update-harness.ps1',
+            '.\scripts\acceptance\codex-static-regression.ps1'
+          )
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell parse failed: $script"
+            }
+          }
+      - name: Run static regression from outside Harness cwd
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP 'sitter-static-regression-project'
+          New-Item -ItemType Directory -Force -Path $project | Out-Null
+          git init $project | Out-Null
+
+          Push-Location -LiteralPath $env:RUNNER_TEMP
+          try {
+            & "$env:GITHUB_WORKSPACE\scripts\acceptance\codex-static-regression.ps1" `
+              -ProjectRoot $project
+          }
+          finally {
+            Pop-Location
+          }
