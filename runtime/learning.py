@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,12 +20,17 @@ ENTRY_STATUSES = {
     "observed", "watching", "ready-for-review", "approved",
     "promoted", "dismissed", "stale",
 }
-KINDS = {"pitfall", "procedure", "tool-gap", "skill-gap", "policy-gap", "fact"}
+KINDS = {
+    "pitfall", "procedure", "tool-gap", "skill-gap", "policy-gap", "fact",
+    "durable-memory",
+}
 SCOPES = {"project", "user-environment", "harness"}
 TARGETS = {
     "ignore", "project-tool", "local-tool", "project-knowledge",
+    "open-thread", "watchpoint",
     "environment-config", "skill", "policy", "harness-change",
 }
+DURABLE_TARGETS = {"project-knowledge", "open-thread", "watchpoint"}
 IMMEDIATE_KINDS = {"security", "data-loss", "silent-numerical-error", "false-validation"}
 
 
@@ -134,6 +140,7 @@ def entry_search_text(entry: dict) -> str:
         (entry.get("signature") or {}).get("category"),
         (entry.get("current_workaround") or {}).get("summary"),
         (entry.get("candidate") or {}).get("recommended_target"),
+        ((entry.get("candidate") or {}).get("durable") or {}).get("memory_key"),
     ]
     return " ".join(str(value).lower() for value in fields if value)
 
@@ -200,6 +207,7 @@ def command_intake(
         "presented": False,
         "decision": "not-required",
         "evidence": None,
+        "candidate_decisions": {},
     })
     write_yaml(task_path, task)
     print(json.dumps({
@@ -324,6 +332,107 @@ def command_observe(
     }, ensure_ascii=False, indent=2))
 
 
+def _head_commit(context: ProjectContext) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=context.project_root,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def command_propose_durable(
+    context: ProjectContext,
+    task_path: Path,
+    *,
+    key: str,
+    title: str,
+    target: str,
+    summary: str,
+    memory_key: str,
+    evidence: list[str],
+    validity_surface: list[str],
+    trigger_terms: list[str],
+    trigger_condition: str | None,
+) -> None:
+    if target not in DURABLE_TARGETS:
+        fail(f"invalid durable target: {target}")
+    if not summary.strip() or not memory_key.strip():
+        fail("durable candidate requires summary and memory-key")
+    if target in {"open-thread", "watchpoint"} and not (
+        trigger_terms or (trigger_condition and trigger_condition.strip())
+    ):
+        fail(f"{target} requires a trigger term or trigger condition")
+
+    task = load_yaml(task_path)
+    current_task_id = task_id(task, task_path)
+    signature_key = normalized_key(key)
+    store = load_store(context)
+    existing = next(
+        (entry for entry in store["entries"] if (entry.get("signature") or {}).get("key") == signature_key),
+        None,
+    )
+    if existing is not None and existing.get("status") not in {"dismissed", "stale"}:
+        fail(f"durable candidate already exists for key: {signature_key}")
+
+    timestamp = now_iso()
+    durable = {
+        "summary": summary.strip(),
+        "memory_key": memory_key.strip(),
+        "validity_surface": list(dict.fromkeys(validity_surface)),
+        "trigger_terms": list(dict.fromkeys(trigger_terms)),
+        "trigger_condition": trigger_condition.strip() if trigger_condition and trigger_condition.strip() else None,
+        "source_commit": _head_commit(context) if validity_surface else None,
+    }
+    entry = {
+        "id": entry_id(signature_key),
+        "title": title,
+        "kind": "durable-memory",
+        "scope": "project",
+        "status": "ready-for-review",
+        "signature": {
+            "key": signature_key,
+            "category": "durable-memory",
+            "platform": platform.system().lower(),
+        },
+        "first_seen": timestamp,
+        "last_seen": timestamp,
+        "occurrences": 1,
+        "task_refs": [current_task_id],
+        "evidence_refs": list(dict.fromkeys(evidence)),
+        "current_workaround": {
+            "summary": None,
+            "verified_successes": 0,
+            "verified_failures": 0,
+        },
+        "candidate": {
+            "recommended_target": target,
+            "readiness": "ready-for-review",
+            "durable": durable,
+        },
+        "review": {"decision": None, "reason": None, "evidence": None},
+    }
+    if existing is None:
+        store["entries"].append(entry)
+    else:
+        existing.clear()
+        existing.update(entry)
+
+    learning = task.setdefault("learning", {})
+    observations = learning.setdefault("observations", [])
+    append_unique(observations, entry["id"])
+    write_yaml(task_path, task)
+    save_store(context, store)
+    print(json.dumps({
+        "id": entry["id"],
+        "target": target,
+        "status": "ready-for-review",
+        "source_commit": durable["source_commit"],
+    }, ensure_ascii=False, indent=2))
+
+
 def command_closeout(context: ProjectContext, task_path: Path, reason: str | None) -> None:
     task = load_yaml(task_path)
     store = load_store(context)
@@ -359,13 +468,15 @@ def command_closeout(context: ProjectContext, task_path: Path, reason: str | Non
             "presented": False,
             "decision": "pending",
             "evidence": None,
+            "candidate_decisions": {},
         }
     else:
         learning["user_attention"] = {
             "required": False,
             "presented": True,
             "decision": "not-required",
-            "evidence": "no mature learning candidate at closeout",
+            "evidence": "no mature learning candidate at closeout; Task history remains cold archive",
+            "candidate_decisions": {},
         }
     write_yaml(task_path, task)
     print(json.dumps({
@@ -374,6 +485,7 @@ def command_closeout(context: ProjectContext, task_path: Path, reason: str | Non
         "existing_entries_updated": updated_count,
         "candidates_ready_for_review": ready,
         "user_attention_required": bool(ready),
+        "cold_archive": not bool(ready),
     }, ensure_ascii=False, indent=2))
 
 
@@ -382,6 +494,7 @@ def command_attention(
     task_path: Path,
     decision: str,
     evidence: str,
+    candidate_id: str | None,
 ) -> None:
     if decision not in {"approved", "deferred", "dismissed"}:
         fail("attention decision must be approved, deferred, or dismissed")
@@ -390,35 +503,61 @@ def command_attention(
     task = load_yaml(task_path)
     learning = task.get("learning") or {}
     closeout = learning.get("closeout") or {}
-    candidates = closeout.get("candidates_ready_for_review") or []
+    candidates = [str(value) for value in closeout.get("candidates_ready_for_review") or []]
     if not candidates:
         fail("task has no mature learning candidates")
+    if candidate_id is None:
+        if len(candidates) != 1:
+            fail("multiple learning candidates require --candidate for individual curation")
+        candidate_id = candidates[0]
+    if candidate_id not in candidates:
+        fail(f"candidate is not part of this Task closeout: {candidate_id}")
 
     store = load_store(context)
-    entries = {entry.get("id"): entry for entry in store["entries"]}
-    for candidate_id in candidates:
-        entry = entries.get(candidate_id)
-        if entry is None:
-            fail(f"learning candidate is missing from inbox: {candidate_id}")
-        review = entry.setdefault("review", {})
-        review.update({"decision": decision, "evidence": evidence, "reviewed_at": now_iso()})
-        if decision == "approved":
-            entry["status"] = "approved"
-        elif decision == "dismissed":
-            entry["status"] = "dismissed"
-        else:
-            entry["status"] = "watching"
-            entry["candidate"]["readiness"] = "deferred"
+    entries = {str(entry.get("id")): entry for entry in store["entries"]}
+    entry = entries.get(candidate_id)
+    if entry is None:
+        fail(f"learning candidate is missing from inbox: {candidate_id}")
+    review = entry.setdefault("review", {})
+    review.update({"decision": decision, "evidence": evidence, "reviewed_at": now_iso()})
+    if decision == "approved":
+        entry["status"] = "approved"
+    elif decision == "dismissed":
+        entry["status"] = "dismissed"
+    else:
+        entry["status"] = "watching"
+        entry["candidate"]["readiness"] = "deferred"
 
-    learning["user_attention"] = {
-        "required": True,
-        "presented": True,
+    attention = learning.setdefault("user_attention", {})
+    per_candidate = attention.setdefault("candidate_decisions", {})
+    per_candidate[candidate_id] = {
         "decision": decision,
         "evidence": evidence,
+        "reviewed_at": now_iso(),
     }
+    remaining = [value for value in candidates if value not in per_candidate]
+    if remaining:
+        attention.update({
+            "required": True,
+            "presented": True,
+            "decision": "pending",
+            "evidence": f"candidate {candidate_id} curated; remaining: {', '.join(remaining)}",
+        })
+    else:
+        distinct = {str(value.get("decision")) for value in per_candidate.values()}
+        attention.update({
+            "required": True,
+            "presented": True,
+            "decision": next(iter(distinct)) if len(distinct) == 1 else "resolved",
+            "evidence": "all mature learning candidates received individual user decisions",
+        })
     write_yaml(task_path, task)
     save_store(context, store)
-    print(f"learning attention recorded: {decision}")
+    print(json.dumps({
+        "candidate": candidate_id,
+        "decision": decision,
+        "remaining": remaining,
+    }, ensure_ascii=False, indent=2))
 
 
 def command_status(context: ProjectContext) -> None:
@@ -466,12 +605,13 @@ def command_review(context: ProjectContext, candidate_id: str) -> None:
         "evidence_refs": entry.get("evidence_refs") or [],
         "root_cause_status": "confirm-before-promotion",
         "recommended_target": target,
+        "durable": (entry.get("candidate") or {}).get("durable"),
         "why_program_first": target in {"project-tool", "local-tool"},
         "current_workaround": entry.get("current_workaround") or {},
         "promotion_rule": (
             "This packet may be presented automatically, but creating or modifying a tool, "
-            "Skill, knowledge, policy, user-level configuration, or Harness code requires "
-            "explicit user approval and a governed Change."
+            "Skill, Project Knowledge, Open Thread, Watchpoint, policy, user-level configuration, "
+            "or Harness code requires explicit user approval and the existing governed promotion path."
         ),
     }
     output = reviews_dir(context) / f"{candidate_id}.yaml"
@@ -530,13 +670,28 @@ def main() -> None:
     observe.add_argument("--verified-failure", action="store_true")
     observe.add_argument("--immediate", action="store_true")
 
+    durable = subparsers.add_parser("propose-durable")
+    durable.add_argument("task")
+    durable.add_argument("--key", required=True)
+    durable.add_argument("--title", required=True)
+    durable.add_argument("--target", choices=sorted(DURABLE_TARGETS), required=True)
+    durable.add_argument("--summary", required=True)
+    durable.add_argument("--memory-key", required=True)
+    durable.add_argument("--evidence", action="append", default=[])
+    durable.add_argument("--validity-surface", action="append", default=[])
+    durable.add_argument("--trigger-term", action="append", default=[])
+    durable.add_argument("--trigger-condition")
+
     closeout = subparsers.add_parser("closeout")
     closeout.add_argument("task")
     closeout.add_argument("--reason")
 
     attention = subparsers.add_parser("attention")
     attention.add_argument("task")
-    attention.add_argument("--decision", choices=["approved", "deferred", "dismissed"], required=True)
+    attention.add_argument("--candidate")
+    attention.add_argument(
+        "--decision", choices=["approved", "deferred", "dismissed"], required=True
+    )
     attention.add_argument("--evidence", required=True)
 
     subparsers.add_parser("status")
@@ -582,10 +737,30 @@ def main() -> None:
             verified_failure=args.verified_failure,
             immediate=args.immediate,
         )
+    elif args.command == "propose-durable":
+        command_propose_durable(
+            context,
+            task_path,
+            key=args.key,
+            title=args.title,
+            target=args.target,
+            summary=args.summary,
+            memory_key=args.memory_key,
+            evidence=args.evidence,
+            validity_surface=args.validity_surface,
+            trigger_terms=args.trigger_term,
+            trigger_condition=args.trigger_condition,
+        )
     elif args.command == "closeout":
         command_closeout(context, task_path, args.reason)
     elif args.command == "attention":
-        command_attention(context, task_path, args.decision, args.evidence)
+        command_attention(
+            context,
+            task_path,
+            args.decision,
+            args.evidence,
+            args.candidate,
+        )
 
 
 if __name__ == "__main__":
