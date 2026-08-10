@@ -32,6 +32,7 @@ def core_required_assets(context: ProjectContext) -> tuple[Path, ...]:
         context.package_root / "runtime" / "delegation_context.py",
         context.package_root / "runtime" / "delegation_validation.py",
         context.package_root / "runtime" / "delegation_transaction.py",
+        context.package_root / "runtime" / "decision_authority.py",
         context.package_root / "runtime" / "harness.py",
         context.package_root / "runtime" / "_harness_impl.py",
         context.package_root / "runtime" / "knowledge_gate.py",
