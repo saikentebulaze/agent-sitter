@@ -114,6 +114,30 @@ def validate_work_risk(task: dict) -> None:
         raise WorkGraphError("task.work_risk history must end at current risk")
 
 
+def _completed_exploration_for_refs(task: dict, refs: set[str]) -> tuple[bool, list[str]]:
+    delegation = task.get("delegation") or {}
+    planned = delegation.get("planned") or []
+    completed_ids = {
+        str(item.get("id"))
+        for item in (delegation.get("completed") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    matches: list[str] = []
+    for entry in planned:
+        if not isinstance(entry, dict):
+            continue
+        delegation_id = str(entry.get("id") or "")
+        if delegation_id not in completed_ids:
+            continue
+        if str(entry.get("agent")) not in EXPLORATION_ROLES:
+            continue
+        target = entry.get("target") or {}
+        if str(target.get("ref") or "") not in refs:
+            continue
+        matches.append(delegation_id)
+    return bool(matches), matches
+
+
 def _relevant_exploration_refs(graph: WorkGraph, change_id: str, change: dict) -> set[str]:
     refs = {str(graph.task.get("id") or ""), change_id}
     derived = (change.get("relations") or {}).get("derived_from") or {}
@@ -123,6 +147,48 @@ def _relevant_exploration_refs(graph: WorkGraph, change_id: str, change: dict) -
         if source.get("type") == "change" and str(source.get("ref") or "") == change_id:
             refs.add(investigation_id)
     return {value for value in refs if value}
+
+
+def investigation_exploration_status(graph: WorkGraph, investigation_id: str) -> dict:
+    """Return the independent-exploration obligation at Investigation truth boundaries.
+
+    The existing Change gate deliberately uses historical peak risk because a
+    production Change keeps its assurance floor. Investigation truth formation
+    uses current risk instead: an open Investigation prevents risk reduction,
+    while an unrelated later LOW Investigation should not inherit a historical
+    HIGH obligation merely because the Task once had one.
+    """
+
+    investigation = graph.investigations.get(investigation_id)
+    if investigation is None:
+        raise WorkGraphError(f"investigation does not exist: {investigation_id}")
+
+    task = graph.task
+    current_label = "legacy"
+    required = False
+    if "work_risk" in task:
+        try:
+            current = vector_from_mapping((task.get("work_risk") or {}).get("current"))
+        except ValueError as error:
+            raise WorkGraphError(str(error)) from error
+        current_label = current.maximum().name.lower()
+        required = current.maximum() >= RiskLevel.HIGH
+
+    refs = {str(task.get("id") or ""), investigation_id}
+    source = investigation.get("source") or {}
+    source_ref = str(source.get("ref") or "")
+    if source_ref:
+        refs.add(source_ref)
+    refs = {value for value in refs if value}
+    satisfied, completed_ids = _completed_exploration_for_refs(task, refs)
+
+    return {
+        "required": required,
+        "satisfied": (not required) or satisfied,
+        "current_risk": current_label,
+        "relevant_refs": sorted(refs),
+        "completed_exploration": completed_ids,
+    }
 
 
 def validate_high_risk_exploration(graph: WorkGraph) -> None:
@@ -143,30 +209,13 @@ def validate_high_risk_exploration(graph: WorkGraph) -> None:
     if peak.maximum() < RiskLevel.HIGH:
         return
 
-    delegation = task.get("delegation") or {}
-    planned = delegation.get("planned") or []
-    completed_ids = {
-        str(item.get("id"))
-        for item in (delegation.get("completed") or [])
-        if isinstance(item, dict) and item.get("id")
-    }
-
     for change_id, (_, change) in graph.changes.items():
         if change.get("execution_state") != "active":
             continue
         if str(change.get("status")) not in ADVANCED_CHANGE_STATUSES:
             continue
         refs = _relevant_exploration_refs(graph, change_id, change)
-        satisfied = False
-        for entry in planned:
-            if not isinstance(entry, dict) or str(entry.get("id")) not in completed_ids:
-                continue
-            if str(entry.get("agent")) not in EXPLORATION_ROLES:
-                continue
-            target = entry.get("target") or {}
-            if str(target.get("ref") or "") in refs:
-                satisfied = True
-                break
+        satisfied, _ = _completed_exploration_for_refs(task, refs)
         if not satisfied:
             raise WorkGraphError(
                 f"HIGH/CRITICAL Task requires completed independent exploration before "
