@@ -38,6 +38,7 @@ def core_required_assets(context: ProjectContext) -> tuple[Path, ...]:
         context.package_root / "runtime" / "knowledge_tool.py",
         context.package_root / "runtime" / "work.py",
         context.package_root / "runtime" / "work_graph.py",
+        context.package_root / "runtime" / "task_status.py",
         context.package_root / "runtime" / "governed_validation.py",
         context.package_root / "runtime" / "governed_work.py",
         context.package_root / "runtime" / "pivot_transaction.py",
