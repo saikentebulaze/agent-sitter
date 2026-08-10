@@ -7,6 +7,7 @@ from pathlib import Path
 
 from governed_validation import (
     ACTIVE_ESCALATIONS,
+    investigation_exploration_status,
     validate_governed_work_graph,
     validate_investigation_policy,
 )
@@ -95,6 +96,21 @@ def _ensure_investigation_mutable(investigation: dict) -> None:
         raise PivotTransactionError("concluded or closed investigation is immutable")
     if investigation.get("execution_state") != "active":
         raise PivotTransactionError("investigation must be active before recording evidence or decisions")
+
+
+def _ensure_investigation_explored(
+    context: ProjectContext,
+    task_root: Path,
+    investigation_id: str,
+    action: str,
+) -> None:
+    graph = validate_governed_work_graph(context, task_root)
+    status = investigation_exploration_status(graph, investigation_id)
+    if status["required"] and not status["satisfied"]:
+        raise PivotTransactionError(
+            "HIGH/CRITICAL Investigation requires completed independent exploration before "
+            f"{action}; evidence, claims, and experiments may continue"
+        )
 
 
 def _global_change_root(context: ProjectContext, change_id: str) -> Path | None:
@@ -268,6 +284,13 @@ def record_decision(
     )
     _ensure_no_escalation(task)
     _ensure_investigation_mutable(investigation)
+    if str(kwargs.get("status") or "") == "accepted":
+        _ensure_investigation_explored(
+            context,
+            task_root,
+            investigation_id,
+            "accepting a decision",
+        )
     requires_human = bool(kwargs.get("requires_human", False))
     if requires_human and (
         not kwargs.get("evidence_ref") or not _human_decision_resolved(task)
@@ -307,6 +330,12 @@ def pivot_to_change(
     )
     _ensure_no_escalation(task)
     _ensure_investigation_mutable(investigation)
+    _ensure_investigation_explored(
+        context,
+        task_root,
+        investigation_id,
+        "pivoting to production Change",
+    )
     change_id = valid_id(change_id, "change_id")
     if _global_change_root(context, change_id) is not None:
         raise PivotTransactionError(f"change id already exists: {change_id}")
@@ -388,6 +417,12 @@ def conclude_investigation(
     )
     _ensure_no_escalation(task)
     _ensure_investigation_mutable(investigation)
+    _ensure_investigation_explored(
+        context,
+        task_root,
+        investigation_id,
+        "concluding the Investigation",
+    )
     if disposition in {"resume-change", "revise-change"}:
         _validate_actionable_decisions(task, investigation)
 
