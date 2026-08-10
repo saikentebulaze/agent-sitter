@@ -43,17 +43,34 @@ def validate_learning(data: dict, status: str) -> None:
     closeout_status = str(closeout.get("status", "pending"))
     if closeout_status not in {"pending", "assessed", "not-applicable"}:
         fail(f"invalid learning.closeout.status: {closeout_status}")
+    ready = closeout.get("candidates_ready_for_review") or []
+    if not isinstance(ready, list) or any(
+        not isinstance(item, str) or not item for item in ready
+    ):
+        fail("learning.closeout.candidates_ready_for_review must be a list of non-empty strings")
+
     attention = learning.get("user_attention") or {}
     decision = str(attention.get("decision", "not-required"))
     if decision not in {
-        "not-required", "pending", "approved", "deferred", "dismissed"
+        "not-required", "pending", "approved", "deferred", "dismissed", "resolved"
     }:
         fail(f"invalid learning.user_attention.decision: {decision}")
+    candidate_decisions = attention.get("candidate_decisions") or {}
+    if not isinstance(candidate_decisions, dict):
+        fail("learning.user_attention.candidate_decisions must be a mapping")
+    for candidate_id, value in candidate_decisions.items():
+        if candidate_id not in ready:
+            fail(f"learning user-attention decision references unknown closeout candidate: {candidate_id}")
+        if not isinstance(value, dict):
+            fail(f"learning candidate decision for {candidate_id} must be a mapping")
+        candidate_decision = str(value.get("decision") or "")
+        if candidate_decision not in {"approved", "deferred", "dismissed"}:
+            fail(f"invalid learning candidate decision for {candidate_id}: {candidate_decision}")
+        non_empty_string(value.get("evidence"), f"learning candidate decision evidence for {candidate_id}")
 
     if status == "completed":
         if closeout_status != "assessed":
             fail("learning closeout must be assessed before task completion")
-        ready = closeout.get("candidates_ready_for_review") or []
         if not observations and not ready:
             non_empty_string(closeout.get("reason"), "learning closeout reason")
         if ready:
@@ -61,11 +78,25 @@ def validate_learning(data: dict, status: str) -> None:
                 fail("mature learning candidates require user attention")
             if not bool(attention.get("presented", False)):
                 fail("mature learning candidates must be presented")
-            if decision not in {"approved", "deferred", "dismissed"}:
-                fail("user must decide how to handle mature learning candidates")
-            non_empty_string(
-                attention.get("evidence"), "learning user-attention evidence"
-            )
+            if len(ready) == 1 and not candidate_decisions:
+                # Legacy one-candidate closeout remains valid.
+                if decision not in {"approved", "deferred", "dismissed"}:
+                    fail("user must decide how to handle mature learning candidates")
+                non_empty_string(
+                    attention.get("evidence"), "learning user-attention evidence"
+                )
+            else:
+                unresolved = [value for value in ready if value not in candidate_decisions]
+                if unresolved:
+                    fail(
+                        "each mature learning candidate requires an individual user decision: "
+                        + ", ".join(unresolved)
+                    )
+                if decision not in {"approved", "deferred", "dismissed", "resolved"}:
+                    fail("learning candidate curation is not resolved")
+                non_empty_string(
+                    attention.get("evidence"), "learning user-attention evidence"
+                )
 
 
 def _project_context(task_path: Path) -> tuple[ProjectContext, Path]:
