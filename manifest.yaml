@@ -1,0 +1,9 @@
+package: sitter
+format_version: 1
+version: 1.0.0
+runtime_path: runtime
+adapters:
+  default:
+    path: adapters/default
+    source_harness: sitter-1.0.0
+    source_date: 2026-08-10

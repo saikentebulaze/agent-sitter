@@ -1,0 +1,109 @@
+schema_version: 4
+id: replace-with-task-id
+title: replace-with-task-title
+status: intake # intake | active | blocked | completed
+
+execution:
+  orchestrator_provider: codex
+
+work_risk:
+  current:
+    semantic: medium
+    repository_change: medium
+  peak:
+    semantic: medium
+    repository_change: medium
+  history: []
+
+current_focus:
+  type: none # none | investigation | change
+  ref:
+
+work_items:
+  investigations: []
+  changes: []
+
+timeline: []
+
+pivot_control:
+  automatic_investigations_from_change:
+    used: 0
+    limit: 1
+  repeated_signatures: {}
+
+escalation:
+  level: none # none | stronger-model | human-checkpoint | blocked
+  reason:
+  signature:
+  related_refs: []
+  model_review:
+    required: false
+    status: not-required # not-required | pending | completed | inconclusive | blocked
+    role:
+    model:
+    tier:
+    outcome:
+    evidence_ref:
+  human_checkpoint:
+    required: false
+    status: not-required # not-required | pending | resolved
+    question:
+    decision:
+    evidence:
+
+delegation:
+  protocol_version: 1
+  decision: not-needed # required | optional | not-needed
+  authorization:
+    status: not-required # not-required | pending | granted | denied
+    scopes: [] # readonly-exploration | readonly-review
+    evidence:
+  model_budget:
+    parent_model: unknown
+    parent_tier: unknown # luna | terra | sol | unknown
+    default_ceiling: parent
+    elevated_authorization:
+      status: not-requested # not-requested | pending | granted | denied
+      approved_tiers: []
+      evidence:
+    reasoning_authorization:
+      status: not-requested # not-requested | pending | granted | denied
+      approved_efforts: []
+      evidence:
+  planned: []
+  completed: []
+  failed: []
+  user_override: false
+
+human_in_loop:
+  mode: guided # autonomous | guided | manual
+  mode_evidence:
+  decision_assessment:
+    status: not-required # pending | not-required | required | resolved
+    reasons:
+      - no material engineering decision has been identified yet
+  decisions: []
+  interruption_budget:
+    batch_questions: true
+    max_design_checkpoints: 1
+
+learning:
+  intake:
+    status: pending # pending | completed | not-applicable
+    checked_at:
+    relevant_entries: []
+    recommended_tools: []
+    evidence:
+  observations: []
+  closeout:
+    status: pending # pending | assessed | not-applicable
+    assessed_at:
+    observations_added: 0
+    existing_entries_updated: 0
+    candidates_ready_for_review: []
+    reason:
+  user_attention:
+    required: false
+    presented: false
+    decision: not-required # not-required | pending | approved | deferred | dismissed
+    evidence:

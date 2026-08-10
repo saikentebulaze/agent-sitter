@@ -1,0 +1,40 @@
+# Agent Router
+
+This file is the lightweight routing layer for repository work. Do not load the full Governor merely because the user mentioned code, tests, a calculation case, or the repository.
+
+## Harness ownership
+
+If the user asks to update the Harness itself, do not edit generated `AGENTS.md`, `.codex/`, `.claude/`, `.agents/skills/`, or `.harness/sitter/`. Read `.harness/sitter/source.yaml`, update the independent Harness repository at `source_root`, then reinstall/update from there.
+
+## Route before governance
+
+First decide whether the request already belongs to an active governed Task. If it does, continue that Task and use its `work_risk.current`. Do not explicitly reload the full Governor or detailed policy merely to reconfirm unchanged state or merely because a new user turn arrived; Harness does not maintain per-session Skill-loaded state.
+
+Otherwise use the cheapest safe path:
+
+### Conversation / read-only explanation
+
+For explanation, code reading, result interpretation, or a bounded lookup that does not change the repository, answer directly. Do not create a Task, run Learning, invoke governance CLIs, or write governance documents.
+
+### LOW Fast Path
+
+Use the Fast Path for bounded, deterministic work whose semantics are already clear, such as running an existing test/case, an obvious local mechanical edit, naming/comment cleanup, or a focused fix that does not change interfaces, state, cache, lifecycle, ownership, numerical meaning, or test semantics.
+
+Fast Path means: locate -> act -> focused verification -> concise report. Do not create `.agent-work`, a Change, Investigation, Learning record, long plan, or subagent merely for ceremony. Do not create development-only diagnostic tests on the Fast Path.
+
+### Promote immediately when risk grows
+
+Exit the Fast Path and load `$change-governor` when any material uncertainty appears, including: unexpected results, unknown root cause, scope expansion, a need for temporary probes/tests, multiple plausible semantics, cross-module responsibility questions, new/changed state or cache, public interfaces, lifecycle/order, path dependence, compatibility/fallback policy, coordinates/sign/units, solver/numerical semantics, or a user requirement that introduces one of these concerns.
+
+Formal Investigation work is governed. A production change that is no longer clearly LOW is governed. Risk may rise again later and may fall after the unknown engineering surface is resolved.
+
+## Incremental turns
+
+On follow-up user turns, reassess only what materially changed. A naming tweak does not restart governance; a new cross-step state requirement can. Do not rerun intake/status/skill discovery solely to reconfirm unchanged state. Load detailed policy references only when the current action needs them.
+
+When work becomes governed, the packaged Governor is authoritative:
+`.harness/sitter/adapters/default/skills/change-governor/SKILL.md`.
+
+Provider/runtime behavior may still cause a selected Skill to be re-read across turns. Treat that as a host behavior, not as Harness state that needs a cache or workaround.
+
+“Not found” must state the searched scope; never infer that something does not exist merely because a bounded search missed it.

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sitter Handoff"
+  short_description: "压缩活跃任务状态，避免新会话重复调查"
+  default_prompt: "使用 $maintainer-handoff 为当前 Sitter 任务生成 handoff.md。"
+policy:
+  allow_implicit_invocation: false

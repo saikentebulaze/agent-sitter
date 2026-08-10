@@ -1,0 +1,80 @@
+schema_version: 1
+id: replace-with-investigation-id
+task_id: replace-with-task-id
+title: replace-with-title
+status: intake # intake | investigating | evidence-review | concluded | closed | blocked
+execution_state: active # active | paused | blocked
+
+source:
+  type: task # task | change | investigation
+  ref: replace-with-source-ref
+  evidence_ref:
+
+problem:
+  question: replace-with-question
+  signature: replace-with-signature
+  scope:
+    models: []
+    subsystems: []
+
+claims: []
+# - id: clm-001
+#   statement: The proposed explanation is correct within the stated scope.
+#   status: open # open | supported | refuted | inconclusive | superseded
+#   confidence: low # low | medium | high
+#   scope:
+#     models: []
+#     result_types: []
+#   supporting_evidence: []
+#   contradicting_evidence: []
+#   decision_impact: []
+#   next_discriminating_experiment:
+
+evidence: []
+# - id: evd-001
+#   kind: experiment
+#   source_ref: experiments/exp-001
+#   provenance: exact command, exported file, log, or native thread
+#   supports: []
+#   contradicts: []
+#   reliability: medium
+#   limitations: []
+
+experiments: []
+# - id: exp-001
+#   hypothesis:
+#   observable_prediction:
+#   source_ref:
+#   result:
+#   cleanup_decision:
+
+decisions: []
+# - id: dec-001
+#   statement:
+#   basis:
+#     claims: []
+#     evidence: []
+#   status: proposed # proposed | accepted | rejected | superseded
+#   requires_human: false
+#   evidence_ref:
+
+remaining_unknowns: []
+
+discrimination_gain:
+  new_data_sources: []
+  new_experiments: []
+  new_observability: []
+  model_review_ref:
+  rationale:
+
+review:
+  status: pending # pending | pass | warn | block | inconclusive
+  execution: {}
+
+disposition:
+  type: pending
+  # pending | no-change-required | resume-change | revise-change | create-change
+  # supersede-change | follow-up-investigation | inconclusive
+  target:
+  rationale:
+  decided_at:

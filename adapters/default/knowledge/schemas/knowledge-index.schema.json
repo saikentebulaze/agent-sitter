@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sitter.local/schemas/knowledge-index.schema.json",
+  "title": "Sitter Knowledge Index",
+  "type": "object",
+  "required": ["version", "entries"],
+  "properties": {
+    "version": {"const": 1},
+    "entries": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "id", "title", "type", "evidence_status", "architecture_status",
+        "path", "domains", "keywords", "related"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "type": {
+          "enum": ["fact", "flow", "decision", "debt", "critical-surface", "glossary"]
+        },
+        "evidence_status": {"enum": ["candidate", "verified", "disputed"]},
+        "architecture_status": {"enum": ["current", "target", "transitional", "legacy"]},
+        "path": {"type": "string", "pattern": "^knowledge/"},
+        "domains": {"type": "array", "items": {"type": "string"}},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "related": {"type": "array", "items": {"type": "string"}},
+        "reviewed_by": {"type": "string"},
+        "reviewed_at": {"type": "string"},
+        "source_change": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

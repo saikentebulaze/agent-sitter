@@ -1,0 +1,15 @@
+# Safe default: Codex may read and write freely inside the project workspace.
+# Reading outside the workspace remains allowed by the sandbox; writes outside
+# the workspace require an explicit approval instead of granting full access.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = false
+
+[agents]
+max_concurrent_threads_per_session = 4
+
+# Agent-specific model and reasoning settings live in codex/agents/*.toml.
+# Project-level profiles are intentionally not used because native Codex
+# subagents must carry their own explicit routing configuration.

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sitter Architecture Health Check"
+  short_description: "只读识别平行状态、职责漂移和架构熵增"
+  default_prompt: "使用 $architecture-health-check 检查指定 Sitter 范围并生成技术债候选。"
+policy:
+  allow_implicit_invocation: false

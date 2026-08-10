@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sitter"
+  short_description: "治理已进入 Task/Investigation/Change 的 MEDIUM+ Sitter 工程工作"
+  default_prompt: "使用 $change-governor 继续当前已治理的 Sitter Task、Investigation、Production Change 或升级流程。"
+policy:
+  allow_implicit_invocation: false

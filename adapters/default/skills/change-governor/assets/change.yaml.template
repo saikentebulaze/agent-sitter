@@ -1,0 +1,114 @@
+schema_version: 4
+id: replace-with-change-id
+task_id: replace-with-task-id
+title: replace-with-title
+status: proposed # proposed | designed | approved | implementing | verifying | syncing | ready-to-archive | archived
+execution_state: active # active | paused | abandoned
+
+hold:
+  reason:
+  investigation_ref:
+  held_at:
+
+relations:
+  derived_from:
+    investigations: []
+    claims: []
+    decisions: []
+    evidence: []
+  produced:
+    investigations: []
+    evidence: []
+  supersedes: []
+  superseded_by:
+
+resume_history: []
+revision_history: []
+
+risk:
+  semantic: medium
+  repository_change: medium
+
+critical_surfaces: []
+
+approval:
+  required: false
+  status: not-required
+  approved_by:
+  approved_at:
+
+human_in_loop:
+  mode: guided # autonomous | guided | manual
+  mode_evidence:
+  decision_assessment:
+    status: not-required # pending | not-required | required | resolved
+    reasons:
+      - no material production decision has been identified yet
+  decisions: []
+  interruption_budget:
+    batch_questions: true
+    max_design_checkpoints: 1
+
+change_budget:
+  allowed_modules: []
+  allowed_files: []
+  approved_new_classes: []
+  approved_new_state: []
+  approved_interface_changes: []
+  approved_responsibility_changes: []
+  allowed_test_changes: []
+  explicit_non_goals: []
+  adjacent_issues: []
+
+methodology:
+  planning_level: brief # none | brief | full
+  superpowers_skills: []
+  tdd_mode: targeted # not-applicable | targeted | required
+  temporary_tests: []
+  test_cleanup_protocol: 1
+  test_cleanup_complete: false
+  test_cleanup_evidence:
+  retained_test_rationale: []
+
+completion:
+  implementation_complete: false
+  ready_for_user_review: false
+
+user_review:
+  status: pending # pending | approved | changes-requested | not-required
+  evidence:
+
+review:
+  status: pending # pending | pass | warn | block
+  architecture: pending
+  scope: pending
+  numerical_evidence: pending
+  reasons: []
+  execution: {}
+
+review_history: []
+
+remediation:
+  route:
+  within_approved_scope: false
+
+verification:
+  status: pending # pending | pass | partial | fail
+  commands: []
+  benchmarks: []
+  latest_results: []
+
+knowledge_sync:
+  status: pending # pending | candidate | reviewed | promoted | deferred
+  entries: []
+  candidate_ref: knowledge-sync.md
+  rendered_diff_ref:
+  reviewed_by:
+  reviewed_at:
+  review_evidence:
+  deferred_reason:
+
+archive:
+  experiment_cleanup_complete: false
+  temporary_production_files: []
+  blockers: []

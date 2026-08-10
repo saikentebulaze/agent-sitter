@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sitter Grill"
+  short_description: "追问并固化 Sitter 关键业务、数值与验收语义"
+  default_prompt: "使用 $decision-grill 澄清当前任务中会改变正式设计的关键歧义。"
+policy:
+  allow_implicit_invocation: false
