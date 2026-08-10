@@ -15,6 +15,7 @@ if str(RUNTIME) not in sys.path:
 
 from adaptive_work import investigate_change, pivot_to_change  # noqa: E402
 from core.work_risk import RiskLevel, RiskVector  # noqa: E402
+from delegation_transaction import authorize_delegation, request_delegation  # noqa: E402
 from governed_validation import validate_high_risk_exploration  # noqa: E402
 from governed_work import record_claim, record_decision, record_evidence  # noqa: E402
 from project_context import ProjectContext  # noqa: E402
@@ -35,6 +36,116 @@ def create_project(root: Path) -> tuple[Path, ProjectContext]:
 
 def load(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def complete_independent_exploration_if_required(
+    context: ProjectContext,
+    task: str,
+    investigation: str,
+) -> None:
+    """Complete one deterministic L2 Scout after the real request transaction.
+
+    These lifecycle tests do not launch a live Codex process. They use the real
+    authorization/request path to freeze an independent Context Capsule, then
+    materialize the minimal completed record needed by the state validator.
+    Real runtime/attestation remains an L3 acceptance concern.
+    """
+
+    task_root = context.project_root / ".agent-work" / task
+    task_path = task_root / "task.yaml"
+    data = load(task_path)
+    risk = (data.get("work_risk") or {}).get("current") or {}
+    order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    current_max = max(
+        order.get(str(risk.get("semantic", "low")), 0),
+        order.get(str(risk.get("repository_change", "low")), 0),
+    )
+    if current_max < order["high"]:
+        return
+
+    delegation = data.get("delegation") or {}
+    for planned in delegation.get("planned") or []:
+        if (
+            str((planned.get("target") or {}).get("ref") or "") == investigation
+            and str(planned.get("agent") or "") in {
+                "source_locator", "context_scout", "test_scout", "framework_scout"
+            }
+            and str(planned.get("id") or "")
+            in {
+                str(item.get("id"))
+                for item in delegation.get("completed") or []
+                if isinstance(item, dict)
+            }
+        ):
+            return
+
+    authorization = delegation.get("authorization") or {}
+    if authorization.get("status") != "granted":
+        authorize_delegation(
+            context,
+            task,
+            decision="required",
+            scopes=["readonly-exploration"],
+            evidence="deterministic V6 lifecycle fixture",
+            parent_model="gpt-5.6-terra",
+            parent_tier="terra",
+        )
+
+    request_path = request_delegation(
+        context,
+        task,
+        role="context_scout",
+        target_type="investigation",
+        target_ref=investigation,
+        purpose="independent lifecycle fixture exploration",
+        question="Independently inspect the investigation before governed final truth.",
+        decision_supported="Whether the Investigation may form governed final truth.",
+        include=["."],
+        exclude=[],
+        start_refs=[],
+        confirmed_facts=[],
+    )
+
+    data = load(task_path)
+    planned = (data.get("delegation") or {}).get("planned")[-1]
+    delegation_id = str(planned["id"])
+    output = request_path.parent / "attempt-01.output.md"
+    record = request_path.parent / "attempt-01.record.yaml"
+    output.write_text(
+        "# Deterministic independent exploration\n\nSynthetic L2 completion only.\n",
+        encoding="utf-8",
+    )
+    record.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "delegation_id": delegation_id,
+                "outcome": "completed",
+                "fixture": "deterministic-l2",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    planned["status"] = "completed"
+    data["delegation"].setdefault("completed", []).append(
+        {
+            "id": delegation_id,
+            "agent": planned["agent"],
+            "model": planned["model"],
+            "tier": planned["tier"],
+            "reasoning_effort": planned["reasoning_effort"],
+            "execution": "native-subagent",
+            "context": {"inheritance": "none"},
+            "output_ref": output.relative_to(context.project_root).as_posix(),
+            "record_ref": record.relative_to(context.project_root).as_posix(),
+            "evidence_ref": f"fixture:{delegation_id}",
+        }
+    )
+    task_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def actionable_decision(context: ProjectContext, task: str, investigation: str) -> None:
@@ -62,6 +173,7 @@ def actionable_decision(context: ProjectContext, task: str, investigation: str) 
         supporting_evidence=["evd-001"],
         contradicting_evidence=[],
     )
+    complete_independent_exploration_if_required(context, task, investigation)
     record_decision(
         context,
         task,
