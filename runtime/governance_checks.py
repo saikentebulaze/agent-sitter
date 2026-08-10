@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from common import fail
+from decision_authority import DecisionAuthorityError, human_decision_digest
 
 
 HUMAN_MODES = {"autonomous", "guided", "manual"}
@@ -91,7 +92,40 @@ def validate_human_in_loop(
             fail("manual human-in-loop mode requires a resolved decision checkpoint")
 
 
+def _validate_decision_authority(data: dict) -> None:
+    if data.get("decision_authority_protocol") != 1:
+        return
+    human = data.get("human_in_loop") or {}
+    status = str((human.get("decision_assessment") or {}).get("status") or "")
+    if status != "resolved":
+        return
+    try:
+        digest = human_decision_digest(data)
+    except DecisionAuthorityError as error:
+        fail(str(error))
+
+    review = data.get("review") or {}
+    if str(review.get("status") or "pending") != "pending":
+        execution = review.get("execution") or {}
+        snapshot = execution.get("input_snapshot") or {}
+        if str(snapshot.get("human_decisions_sha256") or "") != digest:
+            fail(
+                "review does not match the current authoritative human decisions; "
+                "request a new review"
+            )
+
+    knowledge = data.get("knowledge_sync") or {}
+    if str(knowledge.get("status") or "pending") in {"candidate", "reviewed", "promoted"}:
+        if str(knowledge.get("human_decisions_sha256") or "") != digest:
+            fail(
+                "knowledge candidate does not match the current authoritative human decisions; "
+                "render it again before review/promotion"
+            )
+
+
 def validate_change_closure(data: dict, status: str) -> None:
+    _validate_decision_authority(data)
+
     completion = data.get("completion") or {}
     if not isinstance(completion, dict):
         fail("completion must be a mapping")
