@@ -105,5 +105,6 @@ learning:
   user_attention:
     required: false
     presented: false
-    decision: not-required # not-required | pending | approved | deferred | dismissed
+    decision: not-required # not-required | pending | approved | deferred | dismissed | resolved
     evidence:
+    candidate_decisions: {}
