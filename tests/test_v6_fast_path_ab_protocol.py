@@ -83,6 +83,41 @@ class V6FastPathABProtocolTests(unittest.TestCase):
             self.assertEqual(score["candidate"]["task_dirs"], [])
             self.assertFalse(score["candidate"]["checks"]["source_is_minimal_rename"])
 
+    def test_exact_minimal_edit_can_pass_without_governance_overhead(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "fast-ab"
+            FAST.prepare(
+                root,
+                baseline_ref="HEAD",
+                candidate_ref="HEAD",
+                model_label="same-model-control",
+                force=False,
+            )
+            control = json.loads((root / "control.json").read_text(encoding="utf-8"))
+            receipt = {
+                "schema_version": 1,
+                "parent_model_label": "same-model-control",
+                "test_passed": True,
+                "changed_source": FAST.MUTABLE_TARGET,
+            }
+            for side in ("baseline", "candidate"):
+                project = Path(control[side]["project"])
+                (project / FAST.MUTABLE_TARGET).write_text(
+                    FAST.EXPECTED_SOURCE,
+                    encoding="utf-8",
+                )
+                result = project / FAST.RESULT_REF
+                result.parent.mkdir(parents=True, exist_ok=True)
+                result.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+
+            score = FAST.score(root)
+            self.assertEqual(score["status"], "PASS")
+            self.assertTrue(score["controls_valid"])
+            self.assertTrue(score["candidate"]["absolute_pass"])
+            self.assertEqual(score["candidate"]["governance_artifact_count"], 0)
+            self.assertEqual(score["candidate"]["tracked_diff"], [FAST.MUTABLE_TARGET])
+            self.assertEqual(score["fast_path_overhead_delta"]["governance_artifacts"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
