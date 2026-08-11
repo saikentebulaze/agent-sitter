@@ -161,7 +161,7 @@ At the end, write `.v6-benchmark/result.json` with exactly this JSON shape:
 }}
 ```
 
-`selected_files` is not a dump of every file opened: list the context that materially informed the conclusion. Report independent exploration truthfully; the scorer cross-checks it against recorded Harness delegation state and does not trust this field alone.
+`selected_files` is not a dump of every file opened: list the context that materially informed the conclusion. Report independent exploration truthfully; the scorer cross-checks it against recorded Harness delegation state and re-validates runtime attestation instead of trusting this field alone.
 """
 
 
@@ -264,19 +264,83 @@ def _task_roots(project: Path) -> list[Path]:
     )
 
 
+def _validate_completed_attestation(project: Path, completed: dict) -> tuple[bool, dict]:
+    request_ref = str((completed.get("context") or {}).get("request_ref") or "")
+    record_ref = str(completed.get("record_ref") or "")
+    if not request_ref or not record_ref:
+        return False, {"error": "completed exploration lacks request_ref or record_ref"}
+    request = project / request_ref
+    record = project / record_ref
+    runtime = project / ".harness" / "sitter" / "runtime"
+    if not request.is_file() or not record.is_file() or not runtime.is_dir():
+        return False, {"error": "exploration request/record/runtime is missing"}
+
+    validator = r'''
+import json
+import sys
+import yaml
+sys.path.insert(0, sys.argv[1])
+from provider_attestation import validate_provider_attestation
+packet = yaml.safe_load(open(sys.argv[2], encoding="utf-8"))
+record = yaml.safe_load(open(sys.argv[3], encoding="utf-8"))
+attestation = record.get("attestation")
+if not isinstance(attestation, dict):
+    raise ValueError("record has no attestation")
+evidence = validate_provider_attestation(packet, attestation)
+print(json.dumps({
+    "provider": evidence.provider,
+    "role_id": evidence.role_id,
+    "context_isolation": evidence.contract.context_isolation,
+    "write_isolation": evidence.contract.write_isolation,
+    "attestation_strength": evidence.contract.attestation_strength,
+}))
+'''
+    result = _run(
+        [
+            sys.executable,
+            "-c",
+            validator,
+            str(runtime),
+            str(request),
+            str(record),
+        ],
+        cwd=project,
+        check=False,
+    )
+    if result.returncode:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "error": result.stderr.strip() or result.stdout.strip() or "attestation validation failed",
+        }
+    try:
+        details = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "error": "attestation validator returned invalid JSON",
+        }
+    details.update({"request_ref": request_ref, "record_ref": record_ref})
+    return True, details
+
+
 def _actual_exploration(project: Path) -> dict:
     roles: set[str] = set()
     completed_ids: set[str] = set()
     task_ids: list[str] = []
+    attested: list[dict] = []
+    rejected: list[dict] = []
     governed_final_truth_without_exploration = False
     for task_root in _task_roots(project):
         task = yaml.safe_load((task_root / "task.yaml").read_text(encoding="utf-8"))
         if not isinstance(task, dict):
             continue
-        task_ids.append(str(task.get("id") or task_root.name))
+        task_id = str(task.get("id") or task_root.name)
+        task_ids.append(task_id)
         delegation = task.get("delegation") or {}
-        completed = {
-            str(item.get("id"))
+        completed_entries = {
+            str(item.get("id")): item
             for item in delegation.get("completed") or []
             if isinstance(item, dict) and item.get("id")
         }
@@ -285,11 +349,25 @@ def _actual_exploration(project: Path) -> dict:
             for item in delegation.get("planned") or []
             if isinstance(item, dict) and item.get("id")
         }
-        for delegation_id in completed:
+        task_valid_ids: set[str] = set()
+        for delegation_id, completed in completed_entries.items():
             role = planned.get(delegation_id, "")
-            if role in EXPLORATION_ROLES:
+            if role not in EXPLORATION_ROLES:
+                continue
+            valid, evidence = _validate_completed_attestation(project, completed)
+            row = {
+                "task_id": task_id,
+                "delegation_id": delegation_id,
+                "role": role,
+                **evidence,
+            }
+            if valid:
+                task_valid_ids.add(delegation_id)
                 completed_ids.add(delegation_id)
                 roles.add(role)
+                attested.append(row)
+            else:
+                rejected.append(row)
 
         has_final_truth = False
         investigations = task_root / "investigations"
@@ -306,7 +384,7 @@ def _actual_exploration(project: Path) -> dict:
                 concluded = data.get("status") in {"concluded", "closed"}
                 if accepted or concluded:
                     has_final_truth = True
-        if has_final_truth and not completed_ids:
+        if has_final_truth and not task_valid_ids:
             governed_final_truth_without_exploration = True
 
     return {
@@ -314,6 +392,8 @@ def _actual_exploration(project: Path) -> dict:
         "delegation_ids": sorted(completed_ids),
         "roles": sorted(roles),
         "task_ids": task_ids,
+        "attested": attested,
+        "rejected_unattested": rejected,
         "governed_final_truth_without_exploration": governed_final_truth_without_exploration,
     }
 
@@ -448,8 +528,9 @@ def score(root: Path) -> dict:
             "fast_path_overhead": "covered separately by H3/P2 deterministic cases",
         },
         "note": (
-            "This scorer verifies identical fixture/prompt bytes and actual Harness exploration records. "
-            "The operator remains responsible for launching both fresh sessions with the same model/configuration."
+            "This scorer verifies identical fixture/prompt bytes and accepts independent exploration only when "
+            "the recorded child delegation passes the installed Provider attestation validator. The operator "
+            "remains responsible for launching both fresh sessions with the same model/configuration."
         ),
     }
 
