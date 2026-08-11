@@ -111,12 +111,17 @@ class V6FastPathABProtocolTests(unittest.TestCase):
                 result.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
 
             score = FAST.score(root)
-            self.assertEqual(score["status"], "PASS")
-            self.assertTrue(score["controls_valid"])
-            self.assertTrue(score["candidate"]["absolute_pass"])
-            self.assertEqual(score["candidate"]["governance_artifact_count"], 0)
-            self.assertEqual(score["candidate"]["tracked_diff"], [FAST.MUTABLE_TARGET])
-            self.assertEqual(score["fast_path_overhead_delta"]["governance_artifacts"], 0)
+            diagnostic = json.dumps(score, ensure_ascii=False, indent=2)
+            self.assertTrue(score["controls_valid"], diagnostic)
+            self.assertTrue(score["baseline"]["absolute_pass"], diagnostic)
+            self.assertTrue(score["candidate"]["absolute_pass"], diagnostic)
+            self.assertTrue(score["no_overhead_regression"], diagnostic)
+            self.assertEqual(score["status"], "PASS", diagnostic)
+            self.assertEqual(score["candidate"]["governance_artifact_count"], 0, diagnostic)
+            self.assertEqual(score["candidate"]["tracked_diff"], [FAST.MUTABLE_TARGET], diagnostic)
+            self.assertEqual(
+                score["fast_path_overhead_delta"]["governance_artifacts"], 0, diagnostic
+            )
 
 
 if __name__ == "__main__":
