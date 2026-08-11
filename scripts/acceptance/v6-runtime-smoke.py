@@ -267,7 +267,7 @@ Follow this sequence exactly:
 2. Read `.agent-work/_runtime-smoke/manifest.json`.
 3. Explicitly read the Governor file named by `governor_ref`. Compute the SHA-256 of the exact file you read. This is an explicit Governor invocation for acceptance only; do not let it create extra work.
 4. Execute the `context_scout` argv from the manifest exactly once. Capture the parsed JSON printed by the command. The readonly child must actually run and complete; do not substitute your own exploration.
-5. Execute the `memory_scout` argv exactly once. Capture the parsed JSON printed by the command. The Memory Scout must actually run; do not summarize the memory yourself instead.
+5. Execute the `memory_scout` argv from the manifest exactly once. Capture the parsed JSON printed by the command. The Memory Scout must actually run; do not summarize the memory yourself instead.
 6. Execute the `validate` argv from the manifest.
 7. Write `.agent-work/_runtime-smoke/agent-result.json` with this shape:
 
@@ -353,6 +353,16 @@ def _validate_completed_attestation(project: Path, completed: dict) -> dict:
     }
 
 
+def _session_event_matches(event: dict, task_id: str, canary: str) -> bool:
+    return bool(
+        str(event.get("source") or "") == "startup"
+        and task_id in (event.get("active_task_ids") or [])
+        and canary in str(event.get("additional_context") or "")
+        and not bool(event.get("history_scanned"))
+        and not bool(event.get("durable_memory_loaded"))
+    )
+
+
 def verify(project: Path) -> dict:
     project = project.expanduser().resolve()
     manifest = json.loads((project / MANIFEST_REF).read_text(encoding="utf-8"))
@@ -361,19 +371,20 @@ def verify(project: Path) -> dict:
     canary = str(manifest["session_start_canary"])
     checks: dict[str, object] = {}
 
-    session_events = sorted((project / SESSION_EVIDENCE_REF).glob("session-start-*.json"))
-    checks["session_start_evidence_present"] = bool(session_events)
-    session_evidence = None
-    if session_events:
-        session_evidence = json.loads(session_events[-1].read_text(encoding="utf-8"))
-        checks["session_start_hook_effective"] = (
-            task_id in (session_evidence.get("active_task_ids") or [])
-            and canary in str(session_evidence.get("additional_context") or "")
-            and not bool(session_evidence.get("history_scanned"))
-            and not bool(session_evidence.get("durable_memory_loaded"))
-        )
-    else:
-        checks["session_start_hook_effective"] = False
+    session_event_paths = sorted((project / SESSION_EVIDENCE_REF).glob("session-start-*.json"))
+    parsed_events: list[dict] = []
+    for path in session_event_paths:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            parsed_events.append(value)
+    host_events = [event for event in parsed_events if _session_event_matches(event, task_id, canary)]
+    checks["session_start_evidence_present"] = bool(parsed_events)
+    checks["session_start_host_event_count"] = len(host_events)
+    checks["session_start_hook_effective"] = bool(host_events)
+    session_evidence = host_events[0] if host_events else None
 
     observation_path = project / OBSERVATION_REF
     checks["parent_received_session_context"] = False
@@ -473,10 +484,11 @@ def verify(project: Path) -> dict:
         "status": "PASS" if passed else "FAIL",
         "checks": checks,
         "session_start_evidence": session_evidence,
+        "all_session_start_event_count": len(parsed_events),
         "l3_black_box": True,
         "note": (
-            "PASS requires an opt-in SessionStart event produced by a real fresh host session plus "
-            "real provider-validated child attestations; prepare alone can never produce PASS."
+            "PASS requires a matching startup SessionStart event produced by the real fresh parent host session plus "
+            "real provider-validated child attestations; later child/session hook events cannot replace the parent evidence."
         ),
     }
 
