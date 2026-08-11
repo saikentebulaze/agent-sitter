@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
+import uuid
 from pathlib import Path
 
 from active_task_index import session_start_payload
 from project_context import resolve_project_context
+
+
+_SMOKE_EVIDENCE_ENV = "SITTER_SESSION_START_EVIDENCE_DIR"
 
 
 def _project_root(cwd: str | Path) -> Path:
@@ -60,6 +66,60 @@ def continuity_text(payload: dict) -> str:
     return "\n".join(lines)
 
 
+def _optional_evidence_dir(root: Path) -> Path | None:
+    raw = os.environ.get(_SMOKE_EVIDENCE_ENV, "").strip()
+    if not raw:
+        return None
+    value = Path(raw).expanduser()
+    path = value.resolve() if value.is_absolute() else (root / value).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise ValueError(
+            f"{_SMOKE_EVIDENCE_ENV} must remain inside the project root"
+        ) from error
+    return path
+
+
+def _record_optional_evidence(
+    root: Path,
+    event: dict,
+    payload: dict,
+    additional_context: str,
+) -> None:
+    directory = _optional_evidence_dir(root)
+    if directory is None:
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": 1,
+        "hook_event_name": "SessionStart",
+        "source": str(event.get("source") or ""),
+        "session_id": str(event.get("session_id") or event.get("sessionId") or ""),
+        "cwd": str(event.get("cwd") or root),
+        "active_task_count": int(payload.get("active_task_count") or 0),
+        "active_task_ids": [
+            str(item.get("id"))
+            for item in (payload.get("active_tasks") or [])
+            if isinstance(item, dict) and item.get("id")
+        ],
+        "history_scanned": bool(payload.get("history_scanned", False)),
+        "durable_memory_loaded": bool(payload.get("durable_memory_loaded", False)),
+        "additional_context": additional_context,
+    }
+    path = directory / f"session-start-{time.time_ns()}-{uuid.uuid4().hex}.json"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            json.dump(record, stream, ensure_ascii=False, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def build_hook_output(event: dict, *, project_root: Path | None = None) -> dict | None:
     if str(event.get("hook_event_name") or "") != "SessionStart":
         return None
@@ -72,6 +132,7 @@ def build_hook_output(event: dict, *, project_root: Path | None = None) -> dict 
     text = continuity_text(payload)
     if not text:
         return None
+    _record_optional_evidence(root, event, payload, text)
     return {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
