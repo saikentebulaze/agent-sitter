@@ -27,6 +27,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Record V6 deterministic behavior baseline
         run: python scripts/acceptance/v6-behavior-baseline.py
+      - name: Record V6 candidate deterministic status
+        run: python scripts/acceptance/v6-candidate-status.py
       - name: Parse PowerShell acceptance scripts
         if: runner.os == 'Windows'
         shell: powershell
