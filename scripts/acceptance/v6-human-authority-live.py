@@ -90,6 +90,8 @@ Continue the single existing governed Change in this project. This is an accepta
 
 The material decision has already been resolved by the user and is authoritative project state. **Do not infer the answer from this prompt and do not ask the user again.** Read the existing Task and Change state to determine both the Agent's historical recommendation and the user's authoritative choice.
 
+For acceptance traceability, use the exact recorded `user_decision` string verbatim in the implemented error/result semantics and in the downstream design, verification, review, and durable-memory summary. Do not copy the exact recorded `recommendation` string into those downstream artifacts; it remains historical context and should appear only where the result schema explicitly records the observed recommendation.
+
 Perform a minimal downstream implementation of the already-resolved choice:
 
 1. Read the generated project entrypoint/router and the existing governed Task/Change.
