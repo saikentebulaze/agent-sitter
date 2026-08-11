@@ -5,7 +5,6 @@ import hashlib
 import importlib.util
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -24,6 +23,7 @@ DEFAULT_BASELINE_REF = COMMON.DEFAULT_BASELINE_REF
 CONTROL_NAME = "control.json"
 PROMPT_REF = Path(".v6-fast-path/PROMPT.md")
 RESULT_REF = Path(".v6-fast-path/result.json")
+MUTABLE_TARGET = "src/fast_path.py"
 EXPECTED_SOURCE = "def size(items):\n    count = len(items)\n    return count\n"
 
 
@@ -39,7 +39,7 @@ def _safe_root(destination: Path, force: bool) -> Path:
 
 def _fixture_payloads() -> dict[str, bytes]:
     payloads: dict[str, bytes] = {
-        "src/fast_path.py": b"def size(items):\n    x = len(items)\n    return x\n",
+        MUTABLE_TARGET: b"def size(items):\n    x = len(items)\n    return x\n",
         "tests/test_fast_path.py": (
             b"from src.fast_path import size\n\n"
             b"assert size([1, 2, 3]) == 3\n"
@@ -112,6 +112,16 @@ def _fixture_hash(project: Path) -> str:
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _immutable_fixture_valid(project: Path) -> bool:
+    for relative, expected in _fixture_payloads().items():
+        if relative == MUTABLE_TARGET:
+            continue
+        path = project / relative
+        if not path.is_file() or path.read_bytes() != expected:
+            return False
+    return True
 
 
 def _write_fixture(project: Path) -> str:
@@ -256,7 +266,7 @@ def _score_side(project: Path, side: dict, model_label: str) -> dict:
     result_path = project / RESULT_REF
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.is_file() else {}
     test = COMMON._run([sys.executable, "tests/test_fast_path.py"], cwd=project, check=False)
-    source = project / "src" / "fast_path.py"
+    source = project / MUTABLE_TARGET
     source_text = source.read_text(encoding="utf-8") if source.is_file() else ""
     diff = COMMON._run(["git", "diff", "--name-only"], cwd=project, check=False)
     tracked_diff = sorted(line.strip().replace("\\", "/") for line in diff.stdout.splitlines() if line.strip())
@@ -273,10 +283,11 @@ def _score_side(project: Path, side: dict, model_label: str) -> dict:
     checks = {
         "model_label_matches_control": result.get("parent_model_label") == model_label,
         "receipt_reports_test_pass": result.get("test_passed") is True,
-        "receipt_reports_only_source": result.get("changed_source") == "src/fast_path.py",
+        "receipt_reports_only_source": result.get("changed_source") == MUTABLE_TARGET,
         "source_is_minimal_rename": source_text == EXPECTED_SOURCE,
         "existing_test_passes": test.returncode == 0,
-        "tracked_diff_only_source": tracked_diff == ["src/fast_path.py"],
+        "tracked_diff_only_source": tracked_diff == [MUTABLE_TARGET],
+        "immutable_fixture_unchanged": _immutable_fixture_valid(project),
         "no_new_governed_task": tasks == [],
         "no_change_object": changes == [],
         "no_delegation": delegation_dirs == 0,
@@ -305,8 +316,8 @@ def score(root: Path) -> dict:
     baseline_project = Path(control["baseline"]["project"]).resolve()
     candidate_project = Path(control["candidate"]["project"]).resolve()
     controls_valid = (
-        _fixture_hash(baseline_project) == control["fixture_sha256"]
-        and _fixture_hash(candidate_project) == control["fixture_sha256"]
+        _immutable_fixture_valid(baseline_project)
+        and _immutable_fixture_valid(candidate_project)
         and COMMON._sha256_file(baseline_project / PROMPT_REF) == control["prompt_sha256"]
         and COMMON._sha256_file(candidate_project / PROMPT_REF) == control["prompt_sha256"]
     )
