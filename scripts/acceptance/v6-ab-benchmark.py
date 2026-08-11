@@ -80,6 +80,7 @@ def _materialize_ref(ref: str, destination: Path) -> str:
             f"Harness ref is not available locally: {ref}. Fetch repository history before preparing the A/B run."
         )
     sha = resolved.stdout.strip()
+    destination.parent.mkdir(parents=True, exist_ok=True)
     archive = destination.parent / f".{destination.name}-{sha[:12]}.zip"
     _run(
         ["git", "archive", "--format=zip", "--output", str(archive), sha],
