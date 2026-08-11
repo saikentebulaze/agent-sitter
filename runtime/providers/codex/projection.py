@@ -8,7 +8,7 @@ from project_context import ProjectContext
 from providers.codex.profiles import load_native_agent_profile
 
 
-_SESSION_START_HOOK = r'''
+_SESSION_START_HOOK = r"""
 
 # V6 bounded cross-session continuity. The source config remains the frozen
 # V4.1 security baseline; this managed projection adds only SessionStart state.
@@ -22,7 +22,7 @@ command_windows = '''powershell -NoProfile -ExecutionPolicy Bypass -Command "$ro
 timeout = 5
 statusMessage = "Loading bounded Sitter task continuity"
 additionalContextLimit = 1000
-'''
+"""
 
 
 def entrypoint_text() -> str:
