@@ -63,6 +63,15 @@ def _task_authority(context: ProjectContext, task_id: str | None) -> str | None:
     return human_decision_digest(task)
 
 
+def _task_authority_digest(context: ProjectContext, task_id: str | None) -> str | None:
+    if not task_id:
+        return None
+    path = context.project_root / ".agent-work" / task_id / "task.yaml"
+    if not path.is_file():
+        return None
+    return human_decision_digest(load_yaml(path))
+
+
 def _render_markdown(entry: dict, durable: dict, evidence_refs: list[str]) -> str:
     lines = [
         f"# {entry['title']}",
@@ -153,6 +162,18 @@ def promote_candidate(
         )
 
     source_task = str((candidate.get("task_refs") or [None])[0] or "") or None
+    expected_authority = str(durable.get("authority_sha256") or "").strip()
+    if not expected_authority:
+        raise DurableMemoryError(
+            "durable candidate has no human decision authority snapshot; re-propose it"
+        )
+    current_authority = _task_authority_digest(context, source_task)
+    if current_authority is None:
+        raise DurableMemoryError("durable candidate source Task is unavailable")
+    if expected_authority != current_authority:
+        raise DurableMemoryError(
+            "durable candidate is stale; authoritative human decisions changed"
+        )
     entry_type = TARGET_TO_TYPE[target]
     path = f"knowledge/memory/{candidate_id}.md"
     entry = {

@@ -50,6 +50,16 @@ def run_validator(change: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_runtime(script: str, *args: object) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(RUNTIME / script), *map(str, args)],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    )
+
+
 def create_project(root: Path) -> tuple[Path, Path]:
     project = root / "project"
     project.mkdir()
@@ -118,6 +128,146 @@ def create_project(root: Path) -> tuple[Path, Path]:
 
 
 class V6HumanAuthorityTests(unittest.TestCase):
+    def test_pivot_propagates_task_human_decision_to_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            subprocess.run(
+                ["git", "init", str(project)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            lock = project / ".harness" / "sitter" / "manifest-lock.yaml"
+            lock.parent.mkdir(parents=True)
+            lock.write_text("package: sitter\nformat_version: 1\n", encoding="utf-8")
+
+            created = run_runtime(
+                "create_task.py",
+                "authority-pivot",
+                "--title",
+                "Authority pivot",
+                "--entry",
+                "investigation",
+                "--signature",
+                "authority-pivot",
+                "--project",
+                project,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+
+            task_path = project / ".agent-work" / "authority-pivot" / "task.yaml"
+            task = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+            task["human_in_loop"] = {
+                "mode": "guided",
+                "mode_evidence": None,
+                "decision_assessment": {
+                    "status": "resolved",
+                    "reasons": ["two state ownership choices remain materially valid"],
+                },
+                "decisions": [
+                    {
+                        "id": "DEC-H1",
+                        "question": "Which state ownership scheme is authoritative?",
+                        "options": ["A", "B"],
+                        "recommendation": "A",
+                        "user_decision": "B",
+                        "evidence": "user explicitly selected B",
+                    }
+                ],
+                "interruption_budget": {
+                    "batch_questions": True,
+                    "max_design_checkpoints": 1,
+                },
+            }
+            task_path.write_text(
+                yaml.safe_dump(task, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            commands = [
+                (
+                    "record-evidence",
+                    "authority-pivot",
+                    "inv-001",
+                    "--id",
+                    "e01",
+                    "--kind",
+                    "user-decision",
+                    "--source-ref",
+                    "task.yaml",
+                    "--provenance",
+                    "explicit user choice",
+                    "--reliability",
+                    "high",
+                ),
+                (
+                    "record-claim",
+                    "authority-pivot",
+                    "inv-001",
+                    "--id",
+                    "c01",
+                    "--statement",
+                    "The user selected ownership scheme B.",
+                    "--status",
+                    "supported",
+                    "--confidence",
+                    "high",
+                    "--supporting-evidence",
+                    "e01",
+                ),
+                (
+                    "record-decision",
+                    "authority-pivot",
+                    "inv-001",
+                    "--id",
+                    "d01",
+                    "--statement",
+                    "Implement ownership scheme B.",
+                    "--status",
+                    "accepted",
+                    "--claim",
+                    "c01",
+                    "--evidence",
+                    "e01",
+                    "--requires-human",
+                    "--evidence-ref",
+                    "task.yaml#DEC-H1",
+                ),
+                (
+                    "pivot-to-change",
+                    "authority-pivot",
+                    "inv-001",
+                    "authority-change",
+                    "--title",
+                    "Implement authoritative ownership",
+                    "--rationale",
+                    "Apply the user's explicit choice B.",
+                ),
+            ]
+            for command in commands:
+                result = run_runtime(
+                    "work.py",
+                    "--project",
+                    project,
+                    *command,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+            change = yaml.safe_load(
+                (
+                    project
+                    / "changes"
+                    / "active"
+                    / "authority-change"
+                    / "change.yaml"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                change["human_in_loop"],
+                task["human_in_loop"],
+            )
+
     def test_review_packet_projects_user_choice_not_agent_recommendation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project, change = create_project(Path(directory))

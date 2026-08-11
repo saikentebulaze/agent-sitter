@@ -90,6 +90,17 @@ class V6BehaviorBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
+        self.assertEqual(
+            data["baseline_source"],
+            "main@f179c2ece4f5e428bfcd33d375c67f87a289e6cb",
+        )
+        self.assertFalse(data["G1-exploration-gate"]["g1_v6_pass"])
+        self.assertTrue(
+            data["G1-exploration-gate"]["accepted-decision"]["current_pass"]
+        )
+        self.assertFalse(data["task-status-dashboard"]["current_read_only"])
+        self.assertTrue(data["task-status-dashboard"]["status_artifact_changed"])
+        self.assertFalse(data["C7-open-thread"]["implemented"])
         for key in (
             "C1-context-coverage",
             "C2-independent-exploration",

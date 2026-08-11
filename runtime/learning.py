@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from decision_authority import human_decision_digest
 from project_context import ProjectContext, resolve_project_context
 
 
@@ -385,6 +386,7 @@ def command_propose_durable(
         "trigger_terms": list(dict.fromkeys(trigger_terms)),
         "trigger_condition": trigger_condition.strip() if trigger_condition and trigger_condition.strip() else None,
         "source_commit": _head_commit(context) if validity_surface else None,
+        "authority_sha256": human_decision_digest(task),
     }
     entry = {
         "id": entry_id(signature_key),

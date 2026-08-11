@@ -431,6 +431,7 @@ def pivot_to_change(
         decisions=decisions,
         evidence=evidence,
     )
+    change["human_in_loop"] = copy.deepcopy(task.get("human_in_loop") or {})
 
     disposition_type = "supersede-change" if supersede_change else "create-change"
     investigation["status"] = "concluded"

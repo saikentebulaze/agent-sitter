@@ -151,17 +151,19 @@ def static_capabilities() -> dict:
 
 
 def main() -> None:
-    human = run_script("human-authority-fixture.py")
-    g1 = run_script("high-risk-governance-v6-fixture.py")
-    static = static_capabilities()
-
     result = {
         "baseline_source": "main@f179c2ece4f5e428bfcd33d375c67f87a289e6cb",
+        "observation": "frozen historical baseline; current checkout capability is reported separately",
         "C1-context-coverage": {
             "status": "MODEL_RUN_REQUIRED",
             "fixture": "scripts/acceptance/context-coverage-fixture.py",
         },
-        **static,
+        "C2-independent-exploration": {"v6_pass": True},
+        "H3-no-hitl-overhead": {"v6_pass": True},
+        "P2-fast-path-cost": {"v6_pass": True},
+        "C6-memory-evolution": {"implemented": False},
+        "C7-open-thread": {"implemented": False},
+        "H5-memory-conflict": {"implemented": False},
         "C3-cross-session-continuity": {
             "status": "NOT_IMPLEMENTED",
             "reason": "no bounded Active Task Index / resume projection exists",
@@ -171,14 +173,47 @@ def main() -> None:
             "reason": "no Memory Scout or durable memory retrieval path exists",
         },
         "C5-memory-suppression": {
-            "v6_pass": static["P2-fast-path-cost"]["v6_pass"],
+            "v6_pass": True,
             "note": "LOW router currently avoids governed Learning/Memory work",
         },
-        "H1-human-override": human["H1-human-override"],
-        "H2-material-decision-gate": human["H2-material-decision-gate"],
-        "H4-human-curated-memory": h4_probe(),
-        "G1-exploration-gate": g1,
-        "task-status-dashboard": task_status_probe(),
+        "H1-human-override": {
+            "v6_target": "downstream drift to A is blocked after user selected B",
+            "current_validator_allows_drift": True,
+            "v6_pass": False,
+        },
+        "H2-material-decision-gate": {
+            "v6_target": "unresolved material decision blocks advanced HIGH work",
+            "current_validator_blocks": True,
+            "v6_pass": True,
+        },
+        "H4-human-curated-memory": {
+            "per_candidate_curation_available": False,
+            "current_bulk_attention_semantics": True,
+            "v6_target": "K01/O01/W01 may be approved or dismissed independently",
+        },
+        "G1-exploration-gate": {
+            "record-evidence": {"current_pass": True, "v6_target": "pass"},
+            "record-open-claim": {"current_pass": True, "v6_target": "pass"},
+            "experiment": {"current_pass": True, "v6_target": "pass"},
+            "accepted-decision": {
+                "current_pass": True,
+                "v6_target": "block-until-independent-exploration",
+            },
+            "conclude-investigation": {
+                "current_pass": True,
+                "v6_target": "block-until-independent-exploration",
+            },
+            "pivot-to-change": {
+                "current_pass": True,
+                "v6_target": "block-until-independent-exploration",
+            },
+            "g1_v6_pass": False,
+        },
+        "task-status-dashboard": {
+            "current_read_only": False,
+            "status_artifact_changed": True,
+            "v6_target": "task-status performs no mutation",
+        },
         "P1-long-term-cost": {
             "status": "N/A_UNTIL_CONTINUITY_EXISTS",
             "reason": "current SessionStart does not load an Active Task Index",

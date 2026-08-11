@@ -340,6 +340,65 @@ class DurableMemoryPromotionTests(unittest.TestCase):
             entry = next(item for item in index["entries"] if item["id"] == candidate_id)
             self.assertEqual(entry["authority_sha256"], expected)
 
+    def test_human_decision_change_makes_durable_candidate_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = create_project(Path(directory))
+            task = create_memory_task(project)
+            task_data = yaml.safe_load(task.read_text(encoding="utf-8"))
+            task_data["human_in_loop"] = {
+                "mode": "guided",
+                "mode_evidence": None,
+                "decision_assessment": {
+                    "status": "resolved",
+                    "reasons": ["material state ownership fork"],
+                },
+                "decisions": [
+                    {
+                        "id": "DEC-STATE",
+                        "question": "Which state owner is authoritative?",
+                        "options": ["A", "B"],
+                        "recommendation": "A",
+                        "user_decision": "B",
+                        "evidence": "user explicitly chose B",
+                    }
+                ],
+                "interruption_budget": {
+                    "batch_questions": True,
+                    "max_design_checkpoints": 1,
+                },
+            }
+            task.write_text(
+                yaml.safe_dump(task_data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            candidate_id = propose_and_approve(
+                project,
+                task,
+                key="stale-authority-memory",
+            )
+
+            task_data = yaml.safe_load(task.read_text(encoding="utf-8"))
+            task_data["human_in_loop"]["decisions"][0]["user_decision"] = "A"
+            task_data["human_in_loop"]["decisions"][0]["evidence"] = (
+                "user explicitly reconsidered and selected A"
+            )
+            task.write_text(
+                yaml.safe_dump(task_data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            promoted = run(
+                project,
+                "durable_memory.py",
+                "--project",
+                str(project),
+                "promote",
+                candidate_id,
+            )
+            self.assertNotEqual(promoted.returncode, 0)
+            self.assertIn("authoritative human decisions changed", promoted.stderr)
+            self.assertFalse((project / "knowledge" / "index.yaml").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

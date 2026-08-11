@@ -34,7 +34,7 @@ def run(project: Path, script: str, *args: str) -> subprocess.CompletedProcess[s
 
 
 class V6ContextAuthorityTests(unittest.TestCase):
-    def test_g1_and_task_status_baselines_flip_to_v6_pass(self) -> None:
+    def test_frozen_baseline_remains_distinct_from_v6_candidate(self) -> None:
         result = subprocess.run(
             [sys.executable, str(ACCEPTANCE / "v6-behavior-baseline.py")],
             cwd=ROOT,
@@ -44,9 +44,9 @@ class V6ContextAuthorityTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
-        self.assertTrue(data["G1-exploration-gate"]["g1_v6_pass"])
-        self.assertTrue(data["task-status-dashboard"]["current_read_only"])
-        self.assertFalse(data["task-status-dashboard"]["status_artifact_changed"])
+        self.assertFalse(data["G1-exploration-gate"]["g1_v6_pass"])
+        self.assertFalse(data["task-status-dashboard"]["current_read_only"])
+        self.assertTrue(data["task-status-dashboard"]["status_artifact_changed"])
 
     def test_high_investigation_dashboard_exposes_allowed_and_blocked_next(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
