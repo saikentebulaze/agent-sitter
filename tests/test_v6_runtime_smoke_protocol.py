@@ -77,6 +77,25 @@ class V6RuntimeSmokeProtocolTests(unittest.TestCase):
                 claude_manifest["commands"]["context_scout"][3:],
             )
 
+    def test_only_matching_fresh_parent_startup_event_counts_as_session_proof(self) -> None:
+        task_id = "v6-runtime-smoke"
+        canary = "sitter-v6-secret"
+        base = {
+            "active_task_ids": [task_id],
+            "additional_context": f"active Task {task_id} title contains {canary}",
+            "history_scanned": False,
+            "durable_memory_loaded": False,
+        }
+        startup = {**base, "source": "startup"}
+        later_child = {**base, "source": "resume"}
+        wrong_task = {**startup, "active_task_ids": ["another-task"]}
+        eager_memory = {**startup, "durable_memory_loaded": True}
+
+        self.assertTrue(SMOKE._session_event_matches(startup, task_id, canary))
+        self.assertFalse(SMOKE._session_event_matches(later_child, task_id, canary))
+        self.assertFalse(SMOKE._session_event_matches(wrong_task, task_id, canary))
+        self.assertFalse(SMOKE._session_event_matches(eager_memory, task_id, canary))
+
 
 if __name__ == "__main__":
     unittest.main()
