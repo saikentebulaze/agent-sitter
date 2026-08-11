@@ -41,6 +41,9 @@ def _fixture_payloads() -> dict[str, bytes]:
     payloads: dict[str, bytes] = {
         MUTABLE_TARGET: b"def size(items):\n    x = len(items)\n    return x\n",
         "tests/test_fast_path.py": (
+            b"import sys\n"
+            b"from pathlib import Path\n\n"
+            b"sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n"
             b"from src.fast_path import size\n\n"
             b"assert size([1, 2, 3]) == 3\n"
             b"print('fast_path: pass')\n"
