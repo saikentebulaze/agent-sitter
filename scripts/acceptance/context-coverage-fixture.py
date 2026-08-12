@@ -77,7 +77,6 @@ def manifest() -> dict:
         "classification": CLASSIFICATION,
         "expected_root_cause": [
             "src/planner/dispatch.py",
-            "src/state/session.py",
         ],
         "scoring": {
             "required_context_recall_target": 1.0,

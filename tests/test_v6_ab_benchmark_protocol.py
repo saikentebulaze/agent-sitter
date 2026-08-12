@@ -16,6 +16,17 @@ SPEC.loader.exec_module(BENCH)
 
 
 class V6ABBenchmarkProtocolTests(unittest.TestCase):
+    def test_root_cause_owner_is_distinct_from_required_ownership_chain(self) -> None:
+        manifest = BENCH.FIXTURE.manifest()
+        self.assertEqual(
+            manifest["expected_root_cause"],
+            ["src/planner/dispatch.py"],
+        )
+        self.assertIn(
+            "src/state/session.py",
+            manifest["classification"]["required"],
+        )
+
     def test_prepare_uses_identical_fixture_and_prompt_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "ab"
