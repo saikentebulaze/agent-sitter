@@ -1,28 +1,16 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 from core.managed_projection import MARKER, PACKAGE_NAME
 from project_context import ProjectContext
 from providers.codex.profiles import load_native_agent_profile
-
-
-_SESSION_START_HOOK = r"""
-
-# V6 bounded cross-session continuity. The source config remains the frozen
-# V4.1 security baseline; this managed projection adds only SessionStart state.
-[[hooks.SessionStart]]
-matcher = "^(startup|resume|clear|compact)$"
-
-[[hooks.SessionStart.hooks]]
-type = "command"
-command = '/usr/bin/env python3 "$(git rev-parse --show-toplevel)/.harness/sitter/runtime/session_start_hook.py"'
-command_windows = '''powershell -NoProfile -ExecutionPolicy Bypass -Command "$root = (& git rev-parse --show-toplevel).Trim(); & python (Join-Path $root '.harness/sitter/runtime/session_start_hook.py')"'''
-timeout = 5
-statusMessage = "Loading bounded Sitter task continuity"
-additionalContextLimit = 1000
-"""
 
 
 def entrypoint_text() -> str:
@@ -36,10 +24,37 @@ Read `.harness/{PACKAGE_NAME}/adapters/default/bootstrap/AGENTS.md.template` as 
 
 
 def toml_text(source: Path) -> str:
-    text = f"# {MARKER}; do not edit.\n" + source.read_text(encoding="utf-8")
-    if source.name == "config.toml":
-        text += _SESSION_START_HOOK
-    return text
+    return f"# {MARKER}; do not edit.\n" + source.read_text(encoding="utf-8")
+
+
+def hooks_json_text() -> str:
+    argv = [
+        str(Path(sys.executable).resolve()),
+        f".harness/{PACKAGE_NAME}/runtime/session_start_hook.py",
+    ]
+    command = (
+        subprocess.list2cmdline(argv)
+        if os.name == "nt"
+        else shlex.join(argv)
+    )
+    payload = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "startup|resume|clear|compact",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": command,
+                            "timeout": 5,
+                            "statusMessage": "Loading bounded Sitter task continuity",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def agent_toml_text(context: ProjectContext, source: Path) -> str:

@@ -18,7 +18,11 @@ from projection import (
     toml_text,
 )
 from providers.codex.profiles import load_native_agent_profile
-from providers.codex.projection import agent_toml_text, skill_metadata_text
+from providers.codex.projection import (
+    agent_toml_text,
+    hooks_json_text,
+    skill_metadata_text,
+)
 
 
 AGENT_FILES = (
@@ -114,6 +118,11 @@ class CodexProvider:
                 self.provider_id,
                 Path(".codex/config.toml"),
                 toml_text(adapter / "codex" / "config.toml"),
+            ),
+            Projection(
+                self.provider_id,
+                Path(".codex/hooks.json"),
+                hooks_json_text(),
             ),
         ]
         for source in sorted((adapter / "codex" / "agents").glob("*.toml")):

@@ -5,7 +5,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
@@ -53,15 +52,17 @@ class V6SessionStartTests(unittest.TestCase):
             project = create_git_project(Path(directory))
             install.install(project, dry_run=False, provider_ids=("codex",), trust_project=True)
             config_path = project / ".codex" / "config.toml"
-            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
-            session = config["hooks"]["SessionStart"]
+            self.assertNotIn("SessionStart", config_path.read_text(encoding="utf-8"))
+            hooks_path = project / ".codex" / "hooks.json"
+            hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+            session = hooks["hooks"]["SessionStart"]
             self.assertEqual(len(session), 1)
-            self.assertEqual(session[0]["matcher"], "^(startup|resume|clear|compact)$")
+            self.assertEqual(session[0]["matcher"], "startup|resume|clear|compact")
             handler = session[0]["hooks"][0]
             self.assertEqual(handler["type"], "command")
             self.assertIn("session_start_hook.py", handler["command"])
-            self.assertIn("session_start_hook.py", handler["command_windows"])
-            self.assertGreater(handler["additionalContextLimit"], 0)
+            self.assertIn(str(Path(sys.executable).resolve()), handler["command"])
+            self.assertNotIn("powershell", handler["command"].lower())
 
     def test_shared_session_start_hook_reads_only_active_index_and_emits_resume_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

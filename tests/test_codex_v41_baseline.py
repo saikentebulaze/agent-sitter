@@ -18,6 +18,7 @@ import install as installer_module  # noqa: E402
 from core.managed_projection import MARKER  # noqa: E402
 from providers.codex.projection import (  # noqa: E402
     entrypoint_text,
+    hooks_json_text,
     skill_metadata_text,
     skill_wrapper_text,
     toml_text,
@@ -92,6 +93,11 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
                 (project / ".codex" / "config.toml").read_text(encoding="utf-8"),
                 toml_text(config_source),
             )
+            self.assertNotIn("SessionStart", toml_text(config_source))
+            self.assertEqual(
+                (project / ".codex" / "hooks.json").read_text(encoding="utf-8"),
+                hooks_json_text(),
+            )
             self.assertTrue(toml_text(config_source).startswith(marker + config_source.read_text(encoding="utf-8")))
 
             for source in sorted((adapter / "codex" / "agents").glob("*.toml")):
@@ -127,6 +133,7 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
             expected = {
                 "AGENTS.md",
                 ".codex/config.toml",
+                ".codex/hooks.json",
                 *{
                     f".codex/agents/{Path(path).name}"
                     for path in SOURCE_BLOBS
