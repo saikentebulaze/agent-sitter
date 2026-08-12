@@ -252,6 +252,31 @@ class CodexProvider:
         observed = attestation.get("observed") or {}
         expected = packet.get("requested_profile") or {}
         evidence = attestation.get("evidence") or {}
+        if execution.get("method") == "app-server-isolated-agent":
+            from providers.codex.managed_runtime import (
+                validate_managed_attestation,
+            )
+
+            package_root = Path(__file__).resolve().parents[3]
+            context = ProjectContext(
+                package_root,
+                Path(str(packet.get("project_root") or "")),
+                package_root / "adapters" / "default",
+            )
+            validate_managed_attestation(context, packet, attestation)
+            return RuntimeEvidence(
+                provider=self.provider_id,
+                role_id=str(observed.get("agent") or ""),
+                contract=RuntimeContract(
+                    context_isolation="fresh",
+                    write_isolation="os-readonly",
+                    persistent_context="unknown",
+                    attestation_strength="runtime-observed",
+                ),
+                raw_evidence_ref=(
+                    str(execution.get("session_ref") or "") or None
+                ),
+            )
         if attestation.get("schema_version") != 2:
             raise ValueError("runtime attestation schema_version must be 2")
         if execution.get("method") != "native-subagent":
