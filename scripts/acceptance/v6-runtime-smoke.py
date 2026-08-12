@@ -336,6 +336,7 @@ def _validate_completed_attestation(project: Path, completed: dict) -> dict:
     from provider_attestation import validate_provider_attestation
 
     request = _load_yaml(project / str((completed.get("context") or {}).get("request_ref")))
+    request["project_root"] = str(project.resolve())
     record = _load_yaml(project / str(completed.get("record_ref")))
     attestation = record.get("attestation")
     if not isinstance(attestation, dict):

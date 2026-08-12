@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +19,47 @@ SPEC.loader.exec_module(SMOKE)
 
 
 class V6RuntimeSmokeProtocolTests(unittest.TestCase):
+    def test_offline_attestation_validation_uses_verified_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory).resolve()
+            request_ref = ".agent-work/task/delegations/dlg-001/attempt-01.request.yaml"
+            record_ref = ".agent-work/task/delegations/dlg-001/attempt-01.record.yaml"
+            request_path = project / request_ref
+            record_path = project / record_ref
+            request_path.parent.mkdir(parents=True)
+            request_path.write_text(
+                "requested_profile: {}\nproject_root: C:/untrusted-fixture-value\n",
+                encoding="utf-8",
+            )
+            record_path.write_text("attestation:\n  schema_version: 2\n", encoding="utf-8")
+            completed = {
+                "context": {"request_ref": request_ref},
+                "record_ref": record_ref,
+                "output_ref": ".agent-work/task/delegations/dlg-001/attempt-01.result.md",
+            }
+
+            def validate(packet: dict, attestation: dict) -> SimpleNamespace:
+                self.assertEqual(packet["project_root"], str(project))
+                return SimpleNamespace(
+                    provider="codex",
+                    role_id="context_scout",
+                    contract=SimpleNamespace(
+                        context_isolation="fresh",
+                        write_isolation="os-readonly",
+                        attestation_strength="runtime-observed",
+                    ),
+                )
+
+            runtime = ROOT / "runtime"
+            if str(runtime) not in sys.path:
+                sys.path.insert(0, str(runtime))
+            with mock.patch(
+                "provider_attestation.validate_provider_attestation",
+                side_effect=validate,
+            ):
+                evidence = SMOKE._validate_completed_attestation(project, completed)
+            self.assertEqual(evidence["provider"], "codex")
+
     def test_prepare_cannot_fake_a_real_runtime_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "codex-smoke"
