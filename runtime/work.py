@@ -5,7 +5,6 @@ import json
 import sys
 from pathlib import Path
 
-from active_task_index import unregister_active_task
 from adaptive_work import investigate_change, pivot_to_change
 from core.work_risk import RiskVector, parse_level, vector_mapping
 from delegation_transaction import (
@@ -418,7 +417,6 @@ def main() -> None:
             print(f"human checkpoint resolved: {args.action}")
         elif args.command == "complete-task":
             complete_task(context, args.task, rationale=args.rationale)
-            unregister_active_task(context, str(args.task))
             print(f"task completed: {args.task}")
         elif args.command == "authorize-delegation":
             authorize_delegation(

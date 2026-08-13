@@ -5,6 +5,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from active_task_index import index_path, unregister_active_task
 from governed_validation import (
     ACTIVE_ESCALATIONS,
     investigation_exploration_status,
@@ -689,11 +690,12 @@ def complete_task(
     })
     writes[task_path] = dump_yaml(task)
 
-    snapshot = _bytes_snapshot(list(writes))
+    snapshot = _bytes_snapshot([*writes, index_path(context)])
     try:
         for path, content in writes.items():
             atomic_write_text(path, content)
         validate_governed_work_graph(context, task_root)
+        unregister_active_task(context, task_root)
     except BaseException:
         _restore_snapshot(snapshot)
         raise

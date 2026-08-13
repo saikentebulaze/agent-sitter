@@ -59,18 +59,32 @@ def _changed_paths(project_root: Path, source_commit: str) -> set[str] | None:
         "-c",
         "core.quotepath=false",
         "diff",
-        "--name-only",
+        "--name-status",
         "-z",
         f"{source_commit}..HEAD",
         "--",
     )
     if result.returncode != 0:
         return None
-    return {
-        path
-        for raw in result.stdout.split(b"\0")
-        if raw and (path := _decode_git_path(raw))
-    }
+    tokens = result.stdout.split(b"\0")
+    paths: set[str] = set()
+    index = 0
+    while index < len(tokens):
+        status = tokens[index]
+        index += 1
+        if not status:
+            continue
+        path_count = 2 if status[:1] in {b"R", b"C"} else 1
+        if index + path_count > len(tokens):
+            return None
+        for raw in tokens[index:index + path_count]:
+            if not raw:
+                return None
+            path = _decode_git_path(raw)
+            if path:
+                paths.add(path)
+        index += path_count
+    return paths
 
 
 def _working_paths(project_root: Path) -> set[str] | None:

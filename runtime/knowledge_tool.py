@@ -88,7 +88,11 @@ def resolve_knowledge_path(
     ):
         raise ValueError(f"knowledge path must remain under knowledge/: {value}")
 
-    knowledge_root = (project_root / "knowledge").resolve()
+    resolved_project_root = project_root.resolve()
+    expected_knowledge_root = resolved_project_root / "knowledge"
+    knowledge_root = expected_knowledge_root.resolve()
+    if knowledge_root != expected_knowledge_root:
+        raise ValueError("knowledge root must not resolve outside the project")
     candidate = (project_root / Path(*segments)).resolve(strict=False)
     try:
         candidate.relative_to(knowledge_root)
