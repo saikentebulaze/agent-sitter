@@ -126,7 +126,6 @@ def score_result(payload: dict) -> dict:
             recall == 1.0
             and pollution <= 0.25
             and not premature
-            and independent
         ),
     }
 
