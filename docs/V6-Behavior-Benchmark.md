@@ -102,17 +102,19 @@ Then score:
 python scripts/acceptance/v6-ab-benchmark.py score <ab-root>
 ```
 
-The scorer does not trust the Agent's `independent_exploration_completed` field. It accepts engineering exploration only when a recorded Locator/Context/Test/Framework Scout completion re-validates through that side's installed Provider attestation validator. It also rejects a comparison if the fixture or prompt changed after preparation.
+The scorer does not trust the Agent's `independent_exploration_completed` field. When an engineering Locator/Context/Test/Framework Scout is recorded as completed, it counts only if the child result is semantically completed and the recorded child completion re-validates through that side's installed Provider attestation validator. `NEED_CONTEXT` never counts as completed exploration.
 
-The C1 score measures:
+C1 and G1 remain distinct acceptance concerns. C1 measures context quality; it does **not** invent an independent-Scout obligation for a MEDIUM Task when the installed Harness does not require one. Missing independent exploration becomes premature governed convergence only when the recorded Task risk makes the separate G1 HIGH/CRITICAL exploration gate mandatory. G1 itself remains covered by the dedicated high-risk governance fixture and runtime/provider evidence.
+
+The C1 score reports:
 
 - required-context recall;
 - context pollution;
-- premature convergence;
-- attested independent exploration;
+- premature convergence relative to the actual G1 obligation;
+- attested independent exploration when it occurs;
 - expected root-cause ownership.
 
-The candidate must meet the C1 absolute target, avoid regression versus baseline, and show at least one strict behavioral improvement.
+The candidate must meet the C1 absolute context target, identify the expected root-cause owner, avoid premature convergence, avoid recall or pollution regression versus baseline, and show at least one strict behavioral improvement. Independent exploration can be an improvement signal, but is not an unconditional C1 pass condition when G1 is not required.
 
 ## Baseline Expectations
 
@@ -140,7 +142,7 @@ These are historical benchmark observations, not current candidate status.
 | H3 | No HITL overhead | LOW router creates no governed state | ordinary local work remains as lightweight as baseline |
 | H4 | Human-curated memory | per-candidate decisions required | K/O/W candidates are not bulk promoted |
 | H5 | Memory conflict | conflict -> historical lead; explicit supersede | no automatic merge/winner selection |
-| G1 | Exploration gate | accepted/conclude/pivot block before Scout | governed final truth follows independent evidence |
+| G1 | Exploration gate | HIGH/CRITICAL accepted/conclude/pivot block before Scout | governed HIGH/CRITICAL final truth follows independent evidence |
 | P1 | Long-term cost | startup payload independent of archive count | startup context remains bounded over project lifetime |
 | P2 | Fast path cost | LOW work bypasses Memory subsystem | large history does not change ordinary LOW behavior |
 | R1/R2 | Runtime smoke | protocol cannot self-pass | Codex and Claude fresh runtime evidence is real |
