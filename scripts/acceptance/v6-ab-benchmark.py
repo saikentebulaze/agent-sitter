@@ -21,6 +21,7 @@ RESULT_REF = Path(".v6-benchmark/result.json")
 PROMPT_REF = Path(".v6-benchmark/PROMPT.md")
 CONTROL_NAME = "control.json"
 EXPLORATION_ROLES = {"source_locator", "context_scout", "test_scout", "framework_scout"}
+RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
 _FIXTURE_PATH = HARNESS_ROOT / "scripts" / "acceptance" / "context-coverage-fixture.py"
@@ -463,6 +464,29 @@ print(json.dumps({
     return True, details
 
 
+def _exploration_requirement(task: dict) -> tuple[str, bool]:
+    """Mirror the frozen G1 boundary without importing candidate runtime code.
+
+    C1 is a context-quality benchmark, not a second risk router. A missing Scout
+    is premature only when this recorded Task state actually makes G1 mandatory.
+    Legacy Tasks without V6 work_risk have no such obligation.
+    """
+
+    work_risk = task.get("work_risk")
+    if not isinstance(work_risk, dict):
+        return "legacy", False
+    current = work_risk.get("current")
+    if not isinstance(current, dict):
+        return "invalid", True
+    semantic = str(current.get("semantic") or "").strip().lower()
+    repository = str(current.get("repository_change") or "").strip().lower()
+    if semantic not in RISK_ORDER or repository not in RISK_ORDER:
+        return "invalid", True
+    maximum = max(RISK_ORDER[semantic], RISK_ORDER[repository])
+    label = max((semantic, repository), key=lambda value: RISK_ORDER[value])
+    return label, maximum >= RISK_ORDER["high"]
+
+
 def _actual_exploration(project: Path) -> dict:
     roles: set[str] = set()
     completed_ids: set[str] = set()
@@ -470,12 +494,22 @@ def _actual_exploration(project: Path) -> dict:
     attested: list[dict] = []
     rejected: list[dict] = []
     governed_final_truth_without_exploration = False
+    exploration_required_task_ids: list[str] = []
+    task_risks: dict[str, dict] = {}
     for task_root in _task_roots(project):
         task = yaml.safe_load((task_root / "task.yaml").read_text(encoding="utf-8"))
         if not isinstance(task, dict):
             continue
         task_id = str(task.get("id") or task_root.name)
         task_ids.append(task_id)
+        risk_label, exploration_required = _exploration_requirement(task)
+        task_risks[task_id] = {
+            "current": risk_label,
+            "g1_exploration_required": exploration_required,
+        }
+        if exploration_required:
+            exploration_required_task_ids.append(task_id)
+
         delegation = task.get("delegation") or {}
         completed_entries = {
             str(item.get("id")): item
@@ -522,7 +556,7 @@ def _actual_exploration(project: Path) -> dict:
                 concluded = data.get("status") in {"concluded", "closed"}
                 if accepted or concluded:
                     has_final_truth = True
-        if has_final_truth and not task_valid_ids:
+        if has_final_truth and exploration_required and not task_valid_ids:
             governed_final_truth_without_exploration = True
 
     return {
@@ -532,6 +566,8 @@ def _actual_exploration(project: Path) -> dict:
         "task_ids": task_ids,
         "attested": attested,
         "rejected_unattested": rejected,
+        "exploration_required_task_ids": sorted(exploration_required_task_ids),
+        "task_risks": task_risks,
         "governed_final_truth_without_exploration": governed_final_truth_without_exploration,
     }
 
@@ -666,10 +702,10 @@ def score(root: Path) -> dict:
             "fast_path_overhead": "covered separately by H3/P2 deterministic cases",
         },
         "note": (
-            "This scorer verifies identical fixture/prompt bytes and accepts independent exploration only when "
-            "the completed record is semantically completed, its output does not report NEED_CONTEXT, and the "
-            "recorded child delegation passes the installed Provider attestation validator. The operator remains "
-            "responsible for launching both fresh sessions with the same model/configuration."
+            "C1 measures context quality and reports independently attested exploration when it occurs. "
+            "Missing exploration is treated as premature only when the recorded Task risk makes the separate "
+            "G1 HIGH/CRITICAL gate mandatory. Any counted child must still have a semantically completed record, "
+            "a result that does not report NEED_CONTEXT, and a valid installed-Provider attestation."
         ),
     }
 
