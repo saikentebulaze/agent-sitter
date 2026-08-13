@@ -79,6 +79,10 @@ def _validate_recorded_authority(change: Path) -> None:
     execution = review.get("execution") or {}
     snapshot = execution.get("input_snapshot") or {}
     expected = str(snapshot.get("human_decisions_sha256") or "")
+    if authority["status"] == "authoritative" and not expected:
+        raise _impl.ReviewTransactionError(
+            "recorded review has no authoritative human decision snapshot"
+        )
     if expected and expected != authority["sha256"]:
         raise _impl.ReviewTransactionError(
             "recorded review is stale; authoritative human decisions changed"
@@ -157,7 +161,12 @@ def command_promote_knowledge(
     data = _impl.load_yaml(change / "change.yaml")
     sync = data.get("knowledge_sync") or {}
     expected = str(sync.get("human_decisions_sha256") or "")
+    authority = _current_authority(change)
     actual = human_decision_digest(data)
+    if authority["status"] == "authoritative" and not expected:
+        raise _impl.ReviewTransactionError(
+            "knowledge candidate has no authoritative human decision snapshot; render it again"
+        )
     if expected and expected != actual:
         raise _impl.ReviewTransactionError(
             "knowledge candidate is stale; authoritative human decisions changed"

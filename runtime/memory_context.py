@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from common import fail, load_json_or_yaml_like
-from knowledge_tool import validate_entries
+from knowledge_tool import resolve_knowledge_path, validate_entries
 from project_context import ProjectContext, resolve_project_context
 
 
@@ -25,11 +25,24 @@ def _git(project_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _git_raw(project_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=project_root,
+        text=False,
+        capture_output=True,
+    )
+
+
 def _normalize_path(value: str) -> str:
     text = value.strip().replace("\\", "/")
     while text.startswith("./"):
         text = text[2:]
     return text.rstrip("/")
+
+
+def _decode_git_path(value: bytes) -> str:
+    return _normalize_path(value.decode("utf-8", errors="surrogateescape"))
 
 
 def _matches_surface(path: str, surface: str) -> bool:
@@ -41,35 +54,59 @@ def _matches_surface(path: str, surface: str) -> bool:
 
 
 def _changed_paths(project_root: Path, source_commit: str) -> set[str] | None:
-    result = _git(project_root, "diff", "--name-only", f"{source_commit}..HEAD", "--")
+    result = _git_raw(
+        project_root,
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--name-only",
+        "-z",
+        f"{source_commit}..HEAD",
+        "--",
+    )
     if result.returncode != 0:
         return None
     return {
-        _normalize_path(line)
-        for line in result.stdout.splitlines()
-        if _normalize_path(line)
+        path
+        for raw in result.stdout.split(b"\0")
+        if raw and (path := _decode_git_path(raw))
     }
 
 
 def _working_paths(project_root: Path) -> set[str] | None:
-    result = _git(project_root, "status", "--porcelain=v1", "--untracked-files=all")
+    result = _git_raw(
+        project_root,
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    )
     if result.returncode != 0:
         return None
+
+    tokens = result.stdout.split(b"\0")
     paths: set[str] = set()
-    for raw in result.stdout.splitlines():
-        if len(raw) < 4:
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if not token:
             continue
-        value = raw[3:].strip()
-        if " -> " in value:
-            before, after = value.split(" -> ", 1)
-            for candidate in (before, after):
-                normalized = _normalize_path(candidate.strip('"'))
-                if normalized:
-                    paths.add(normalized)
-        else:
-            normalized = _normalize_path(value.strip('"'))
-            if normalized:
-                paths.add(normalized)
+        if len(token) < 4:
+            return None
+        status = token[:2].decode("ascii", errors="replace")
+        current = _decode_git_path(token[3:])
+        if current:
+            paths.add(current)
+        if "R" in status or "C" in status:
+            if index >= len(tokens) or not tokens[index]:
+                return None
+            original = _decode_git_path(tokens[index])
+            index += 1
+            if original:
+                paths.add(original)
     return paths
 
 
@@ -259,7 +296,11 @@ def recall_memory(
     selected: list[dict] = []
     for score, entry_id, entry in ranked[:limit]:
         freshness = memory_freshness(context, entry)
-        path = context.project_root / str(entry["path"])
+        path = resolve_knowledge_path(
+            context.project_root,
+            entry.get("path"),
+            require_exists=True,
+        )
         selected.append(
             {
                 "id": entry_id,

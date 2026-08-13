@@ -67,6 +67,38 @@ def _valid_string_list(value: object, *, allow_empty: bool = True) -> bool:
     )
 
 
+def resolve_knowledge_path(
+    project_root: Path,
+    value: object,
+    *,
+    require_exists: bool = False,
+) -> Path:
+    """Resolve one Knowledge content path without allowing project/Knowledge escape."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("knowledge path must be a non-empty string")
+    normalized = value.strip().replace("\\", "/")
+    segments = normalized.split("/")
+    has_drive = len(normalized) >= 2 and normalized[1] == ":"
+    if (
+        normalized.startswith("/")
+        or has_drive
+        or not normalized.startswith("knowledge/")
+        or any(segment in {"", ".", ".."} for segment in segments)
+    ):
+        raise ValueError(f"knowledge path must remain under knowledge/: {value}")
+
+    knowledge_root = (project_root / "knowledge").resolve()
+    candidate = (project_root / Path(*segments)).resolve(strict=False)
+    try:
+        candidate.relative_to(knowledge_root)
+    except ValueError as error:
+        raise ValueError(f"knowledge path escapes knowledge/: {value}") from error
+    if require_exists and not candidate.is_file():
+        raise ValueError(f"knowledge path does not exist: {value}")
+    return candidate
+
+
 def validate_entries(
     project_root: Path,
     values: list[dict],
@@ -117,10 +149,14 @@ def validate_entries(
             )
 
         path_value = entry.get("path")
-        if not isinstance(path_value, str) or not path_value.startswith("knowledge/"):
-            errors.append(f"invalid path for {entry_id}: {path_value}")
-        elif require_paths and not (project_root / path_value).is_file():
-            errors.append(f"missing path for {entry_id}: {path_value}")
+        try:
+            resolve_knowledge_path(
+                project_root,
+                path_value,
+                require_exists=require_paths,
+            )
+        except ValueError as error:
+            errors.append(f"invalid path for {entry_id}: {error}")
 
         for field in ("domains", "keywords", "related"):
             if not _valid_string_list(entry.get(field)):
@@ -349,7 +385,15 @@ def main() -> None:
         entry = next((item for item in values if item.get("id") == args.id), None)
         if not entry:
             fail(f"unknown id: {args.id}")
-        print((context.project_root / entry["path"]).read_text(encoding="utf-8"))
+        try:
+            path = resolve_knowledge_path(
+                context.project_root,
+                entry.get("path"),
+                require_exists=True,
+            )
+        except ValueError as error:
+            fail(str(error))
+        print(path.read_text(encoding="utf-8"))
         return
 
     errors = validate_entries(context.project_root, values)

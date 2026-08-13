@@ -114,7 +114,12 @@ def validate_work_risk(task: dict) -> None:
         raise WorkGraphError("task.work_risk history must end at current risk")
 
 
-def _completed_exploration_for_refs(task: dict, refs: set[str]) -> tuple[bool, list[str]]:
+def _completed_exploration_for_refs(
+    task: dict,
+    refs: set[str],
+    *,
+    target_type: str | None = None,
+) -> tuple[bool, list[str]]:
     delegation = task.get("delegation") or {}
     planned = delegation.get("planned") or []
     completed_ids = {
@@ -132,6 +137,8 @@ def _completed_exploration_for_refs(task: dict, refs: set[str]) -> tuple[bool, l
         if str(entry.get("agent")) not in EXPLORATION_ROLES:
             continue
         target = entry.get("target") or {}
+        if target_type is not None and str(target.get("type") or "") != target_type:
+            continue
         if str(target.get("ref") or "") not in refs:
             continue
         matches.append(delegation_id)
@@ -154,9 +161,9 @@ def investigation_exploration_status(graph: WorkGraph, investigation_id: str) ->
 
     The existing Change gate deliberately uses historical peak risk because a
     production Change keeps its assurance floor. Investigation truth formation
-    uses current risk instead: an open Investigation prevents risk reduction,
-    while an unrelated later LOW Investigation should not inherit a historical
-    HIGH obligation merely because the Task once had one.
+    uses current risk instead. A HIGH/CRITICAL Investigation is satisfied only
+    by an engineering Scout explicitly targeted at that Investigation; an older
+    Task-level Scout cannot be silently reused for a different truth boundary.
     """
 
     investigation = graph.investigations.get(investigation_id)
@@ -174,13 +181,12 @@ def investigation_exploration_status(graph: WorkGraph, investigation_id: str) ->
         current_label = current.maximum().name.lower()
         required = current.maximum() >= RiskLevel.HIGH
 
-    refs = {str(task.get("id") or ""), investigation_id}
-    source = investigation.get("source") or {}
-    source_ref = str(source.get("ref") or "")
-    if source_ref:
-        refs.add(source_ref)
-    refs = {value for value in refs if value}
-    satisfied, completed_ids = _completed_exploration_for_refs(task, refs)
+    refs = {investigation_id}
+    satisfied, completed_ids = _completed_exploration_for_refs(
+        task,
+        refs,
+        target_type="investigation",
+    )
 
     return {
         "required": required,

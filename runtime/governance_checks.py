@@ -93,12 +93,20 @@ def validate_human_in_loop(
 
 
 def _validate_decision_authority(data: dict) -> None:
-    if data.get("decision_authority_protocol") != 1:
-        return
     human = data.get("human_in_loop") or {}
     status = str((human.get("decision_assessment") or {}).get("status") or "")
+    protocol = data.get("decision_authority_protocol")
+
+    if status == "resolved" and protocol != 1:
+        fail(
+            "resolved human decisions require decision_authority_protocol: 1; "
+            "authority protection must not fail open"
+        )
     if status != "resolved":
+        if protocol not in {None, 1}:
+            fail("unsupported decision_authority_protocol")
         return
+
     try:
         digest = human_decision_digest(data)
     except DecisionAuthorityError as error:
