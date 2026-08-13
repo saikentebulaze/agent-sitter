@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,45 @@ if _SPEC is None or _SPEC.loader is None:
     raise RuntimeError(f"cannot load context coverage fixture: {_FIXTURE_PATH}")
 FIXTURE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(FIXTURE)
+
+
+# Acceptance must independently reject a child that semantically asks for more
+# context even if a runtime bug incorrectly placed it in delegation.completed.
+# Keep this parser independent from runtime/delegate_once.py so the scorer does
+# not reproduce the same inference bug it is supposed to detect.
+_ACCEPTANCE_NEED_CONTEXT = re.compile(
+    r"(?mi)^\s*(?:#{1,6}\s*)?(?:\*\*|__|\*|_)?NEED_CONTEXT(?=(?:\*\*|__|\*|_)?(?:\s|$|[:\-]))"
+)
+_ACCEPTANCE_NEED_CONTEXT_STATUS = re.compile(
+    r"""(?mix)
+    ^\s*
+    (?:[-*+]\s*)?
+    \{?\s*
+    (?:\*\*|__|\*|_)?
+    ["'`]?
+    status
+    ["'`]?
+    (?:\*\*|__|\*|_)?
+    \s*[:=]\s*
+    (?:\*\*|__|\*|_)?
+    ["'`]?
+    NEED_CONTEXT
+    ["'`]?
+    (?:\*\*|__|\*|_)?
+    \s*
+    [,;]?
+    \s*
+    \}?
+    \s*$
+    """
+)
+
+
+def _acceptance_reports_need_context(text: str) -> bool:
+    return bool(
+        _ACCEPTANCE_NEED_CONTEXT.search(text)
+        or _ACCEPTANCE_NEED_CONTEXT_STATUS.search(text)
+    )
 
 
 def _run(
@@ -268,6 +308,7 @@ def _task_roots(project: Path) -> list[Path]:
 def _validate_completed_attestation(project: Path, completed: dict) -> tuple[bool, dict]:
     request_ref = str((completed.get("context") or {}).get("request_ref") or "")
     record_ref = str(completed.get("record_ref") or "")
+    completed_output_ref = str(completed.get("output_ref") or "")
     if not request_ref or not record_ref:
         return False, {"error": "completed exploration lacks request_ref or record_ref"}
     request = project / request_ref
@@ -275,6 +316,92 @@ def _validate_completed_attestation(project: Path, completed: dict) -> tuple[boo
     runtime = project / ".harness" / "sitter" / "runtime"
     if not request.is_file() or not record.is_file() or not runtime.is_dir():
         return False, {"error": "exploration request/record/runtime is missing"}
+
+    try:
+        record_data = yaml.safe_load(record.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "error": f"cannot read exploration record: {error}",
+        }
+    if not isinstance(record_data, dict):
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "error": "exploration record is not a mapping",
+        }
+    if str(record_data.get("outcome") or "") != "completed":
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "recorded_outcome": record_data.get("outcome"),
+            "error": "exploration record outcome is not completed",
+        }
+    requested_outcome = str(record_data.get("requested_outcome") or "")
+    if requested_outcome and requested_outcome != "completed":
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "requested_outcome": requested_outcome,
+            "error": "exploration requested_outcome is not completed",
+        }
+    if str(record_data.get("request_ref") or "") != request_ref:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "error": "exploration record request_ref does not match the completed entry",
+        }
+
+    output_ref = str(record_data.get("output_ref") or "")
+    if not output_ref:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "error": "completed exploration record has no output_ref",
+        }
+    if completed_output_ref and completed_output_ref != output_ref:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "output_ref": output_ref,
+            "error": "exploration record output_ref does not match the completed entry",
+        }
+    output = (project / output_ref).resolve()
+    try:
+        output.relative_to(project.resolve())
+    except ValueError:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "output_ref": output_ref,
+            "error": "exploration output_ref escapes the benchmark project",
+        }
+    if not output.is_file():
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "output_ref": output_ref,
+            "error": "completed exploration output is missing",
+        }
+    try:
+        output_text = output.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "output_ref": output_ref,
+            "error": f"cannot read completed exploration output: {error}",
+        }
+    if _acceptance_reports_need_context(output_text):
+        return False, {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "output_ref": output_ref,
+            "recorded_outcome": "completed",
+            "semantic_status": "need-context",
+            "error": "exploration output reports NEED_CONTEXT and cannot count as completed independent exploration",
+        }
 
     validator = r'''
 import json
@@ -312,6 +439,7 @@ print(json.dumps({
         return False, {
             "request_ref": request_ref,
             "record_ref": record_ref,
+            "output_ref": output_ref,
             "error": result.stderr.strip() or result.stdout.strip() or "attestation validation failed",
         }
     try:
@@ -320,9 +448,18 @@ print(json.dumps({
         return False, {
             "request_ref": request_ref,
             "record_ref": record_ref,
+            "output_ref": output_ref,
             "error": "attestation validator returned invalid JSON",
         }
-    details.update({"request_ref": request_ref, "record_ref": record_ref})
+    details.update(
+        {
+            "request_ref": request_ref,
+            "record_ref": record_ref,
+            "output_ref": output_ref,
+            "recorded_outcome": "completed",
+            "semantic_status": "completed",
+        }
+    )
     return True, details
 
 
@@ -530,8 +667,9 @@ def score(root: Path) -> dict:
         },
         "note": (
             "This scorer verifies identical fixture/prompt bytes and accepts independent exploration only when "
-            "the recorded child delegation passes the installed Provider attestation validator. The operator "
-            "remains responsible for launching both fresh sessions with the same model/configuration."
+            "the completed record is semantically completed, its output does not report NEED_CONTEXT, and the "
+            "recorded child delegation passes the installed Provider attestation validator. The operator remains "
+            "responsible for launching both fresh sessions with the same model/configuration."
         ),
     }
 
