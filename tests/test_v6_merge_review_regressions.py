@@ -64,11 +64,27 @@ class V6MergeReviewRegressionTests(unittest.TestCase):
         self.assertTrue(relevant["satisfied"])
         self.assertEqual(relevant["completed_exploration"], ["dlg-001"])
 
-    def test_resolved_human_decision_cannot_drop_authority_protocol(self) -> None:
+    def test_dropping_protocol_does_not_disable_existing_v6_authority_snapshot(self) -> None:
         data = self._authority_change()
+        data["review"] = {
+            "status": "pass",
+            "execution": {
+                "input_snapshot": {"human_decisions_sha256": "0" * 64},
+            },
+        }
         data.pop("decision_authority_protocol")
         with self.assertRaises(SystemExit):
             _validate_decision_authority(data)
+
+    def test_pre_v6_resolved_change_without_authority_markers_remains_read_compatible(self) -> None:
+        data = self._authority_change()
+        data.pop("decision_authority_protocol")
+        data["review"] = {
+            "status": "pass",
+            "execution": {"input_snapshot": {"design_sha256": "legacy"}},
+        }
+        data["knowledge_sync"] = {"status": "pending"}
+        _validate_decision_authority(data)
 
     def test_knowledge_candidate_cannot_drop_authority_digest(self) -> None:
         data = self._authority_change()

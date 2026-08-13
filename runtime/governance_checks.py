@@ -96,15 +96,26 @@ def _validate_decision_authority(data: dict) -> None:
     human = data.get("human_in_loop") or {}
     status = str((human.get("decision_assessment") or {}).get("status") or "")
     protocol = data.get("decision_authority_protocol")
-
-    if status == "resolved" and protocol != 1:
-        fail(
-            "resolved human decisions require decision_authority_protocol: 1; "
-            "authority protection must not fail open"
-        )
+    if protocol not in {None, 1}:
+        fail("unsupported decision_authority_protocol")
     if status != "resolved":
-        if protocol not in {None, 1}:
-            fail("unsupported decision_authority_protocol")
+        return
+
+    review = data.get("review") or {}
+    execution = review.get("execution") or {}
+    snapshot = execution.get("input_snapshot") or {}
+    knowledge = data.get("knowledge_sync") or {}
+
+    # Pre-V6 schema-v4 Changes may contain resolved human decisions but no
+    # authority protocol/snapshots. Keep them read-compatible. Once any V6
+    # authority marker exists, however, deleting another marker must not make
+    # validation fall open.
+    v6_authority = (
+        protocol == 1
+        or "human_decisions_sha256" in snapshot
+        or "human_decisions_sha256" in knowledge
+    )
+    if not v6_authority:
         return
 
     try:
@@ -112,17 +123,13 @@ def _validate_decision_authority(data: dict) -> None:
     except DecisionAuthorityError as error:
         fail(str(error))
 
-    review = data.get("review") or {}
     if str(review.get("status") or "pending") != "pending":
-        execution = review.get("execution") or {}
-        snapshot = execution.get("input_snapshot") or {}
         if str(snapshot.get("human_decisions_sha256") or "") != digest:
             fail(
                 "review does not match the current authoritative human decisions; "
                 "request a new review"
             )
 
-    knowledge = data.get("knowledge_sync") or {}
     if str(knowledge.get("status") or "pending") in {"candidate", "reviewed", "promoted"}:
         if str(knowledge.get("human_decisions_sha256") or "") != digest:
             fail(
