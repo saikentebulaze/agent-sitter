@@ -110,15 +110,19 @@ After both runs:
 python scripts/acceptance/v6-ab-benchmark.py score ../v6-context-ab
 ```
 
-The scorer verifies control hashes and does not trust the Agent's own statement that independent exploration occurred. Locator/Context/Test/Framework Scout evidence counts only if the recorded child completion re-validates through that side's installed Provider attestation validator.
+The scorer verifies control hashes and never trusts the Agent's own statement that independent exploration occurred. If a Locator/Context/Test/Framework Scout is present, it counts only when the recorded outcome and referenced child-result semantics are genuinely completed and the child completion re-validates through that side's installed Provider attestation validator. `NEED_CONTEXT` is not completion.
+
+C1 is a context-quality benchmark, while G1 is the separate HIGH/CRITICAL exploration gate. Therefore C1 does not require a Scout merely because a governed Investigation exists. A MEDIUM Task may reach a correct C1 conclusion without delegation. Missing exploration is treated as premature only when the Task's recorded V6 risk actually makes G1 mandatory; malformed V6 risk fails closed for this audit. The dedicated high-risk governance fixture continues to prove that HIGH/CRITICAL accepted decisions, conclusions, and pivots cannot bypass G1.
 
 The candidate must:
 
 - meet the absolute required-context target;
 - identify the expected state/planner ownership rather than the solver symptom;
-- avoid premature governed convergence;
+- avoid premature governed convergence relative to its real G1 obligation;
 - avoid recall or pollution regression versus master;
 - show at least one strict behavioral improvement.
+
+Independent exploration remains an observed and attested metric when it occurs, and may count as a behavioral improvement, but it is not an unconditional C1 pass requirement for MEDIUM work.
 
 ## 5. H3/P2 — same-model LOW Fast Path A/B
 
@@ -181,6 +185,7 @@ A final V6 release claiming both Providers should not mark R2 PASS until this re
 | Context Pollution ↓ | C1 same-model A/B |
 | Human Authority = 100% | deterministic H1/H2 + live H1 Human Override |
 | Fast Path Overhead ≈ master | deterministic H3/P2 + LOW Fast Path A/B |
+| G1 HIGH/CRITICAL exploration gate | deterministic high-risk governance fixture + real Provider/runtime proof from R1/R2 |
 | R1 Codex runtime | real fresh Codex runtime smoke |
 | R2 Claude runtime | real fresh Claude runtime smoke |
 
