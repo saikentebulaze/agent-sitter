@@ -114,7 +114,11 @@ The C1 score reports:
 - attested independent exploration when it occurs;
 - expected root-cause ownership.
 
-The candidate must meet the C1 absolute context target, identify the expected root-cause owner, avoid premature convergence, avoid recall or pollution regression versus baseline, and show at least one strict behavioral improvement. Independent exploration can be an improvement signal, but is not an unconditional C1 pass condition when G1 is not required.
+The candidate must always meet the absolute C1 target, identify the expected root-cause owner, avoid premature convergence, and avoid recall or pollution regression versus baseline. When the baseline still has measurable C1 headroom, the candidate must additionally show at least one strict improvement in recall, pollution, root-cause correctness, or premature-convergence behavior. When the baseline already sits at the C1 ceiling — recall `1.0`, pollution `0`, correct root cause, and no premature convergence — an equally correct candidate passes as **non-regressive at ceiling** because no strict improvement remains measurable in this fixture.
+
+Independent exploration remains an observed and attested metric when it occurs, but it is not itself a C1 improvement signal. Its pass/fail role comes from the separate G1 HIGH/CRITICAL obligation.
+
+A single C1 A/B sample is therefore a merge gate for absolute correctness and non-regression, not a statistical claim that V6 improves model behavior on every draw. Repeated A/B sampling may be added later to estimate improvement probability without blocking the initial V6 release.
 
 ## Baseline Expectations
 
@@ -130,7 +134,7 @@ These are historical benchmark observations, not current candidate status.
 
 | ID | Scenario | Deterministic target | Final behavior target |
 | --- | --- | --- | --- |
-| C1 | Context coverage | fixture/scorer correctness | same-model A/B shows higher recall/lower pollution without premature convergence |
+| C1 | Context coverage | fixture/scorer correctness | same-model A/B improves where baseline has headroom and is non-regressive at ceiling |
 | C2 | Independent exploration | `inheritance=none`, parent hypothesis withheld | real child evidence remains independently sourced |
 | C3 | Cross-session continuity | bounded Active Task Index + SessionStart projection | fresh session recovers the prior Task from injected context |
 | C4 | Memory recall | only bounded relevant memory selected | parent receives only useful recovered history |
@@ -153,8 +157,8 @@ V6 is not considered fully accepted merely because L1/L2 are green.
 
 The final success metrics remain:
 
-- **Context Recall ↑** — determined by L4 C1 A/B;
-- **Context Pollution ↓** — determined by L4 C1 A/B;
+- **Context Recall** — improve where the baseline has headroom; remain non-regressive at the C1 ceiling;
+- **Context Pollution** — decrease where the baseline has headroom; remain non-regressive at zero pollution;
 - **Human Authority = 100% for material decisions** — mechanically protected by H1/H2 and still requiring live behavior evidence that the Agent follows the user's choice;
 - **Fast Path Overhead ≈ current master** — mechanically protected by H3/P2 and still subject to a final live LOW-task sanity case.
 
