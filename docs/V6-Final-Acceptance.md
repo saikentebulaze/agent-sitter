@@ -114,15 +114,21 @@ The scorer verifies control hashes and never trusts the Agent's own statement th
 
 C1 is a context-quality benchmark, while G1 is the separate HIGH/CRITICAL exploration gate. Therefore C1 does not require a Scout merely because a governed Investigation exists. A MEDIUM Task may reach a correct C1 conclusion without delegation. Missing exploration is treated as premature only when the Task's recorded V6 risk actually makes G1 mandatory; malformed V6 risk fails closed for this audit. The dedicated high-risk governance fixture continues to prove that HIGH/CRITICAL accepted decisions, conclusions, and pivots cannot bypass G1.
 
-The candidate must:
+The candidate must always:
 
 - meet the absolute required-context target;
 - identify the expected state/planner ownership rather than the solver symptom;
 - avoid premature governed convergence relative to its real G1 obligation;
-- avoid recall or pollution regression versus master;
-- show at least one strict behavioral improvement.
+- avoid recall or pollution regression versus master.
 
-Independent exploration remains an observed and attested metric when it occurs, and may count as a behavioral improvement, but it is not an unconditional C1 pass requirement for MEDIUM work.
+The A/B comparison then applies one additional rule:
+
+- if the baseline still has measurable C1 headroom, the candidate must show at least one strict improvement in recall, pollution, root-cause correctness, or premature-convergence behavior;
+- if the baseline is already at the measurable C1 ceiling — recall `1.0`, pollution `0`, correct root cause, and no premature convergence — an equally correct candidate passes as **non-regressive at ceiling**.
+
+Independent exploration remains an observed and attested metric when it occurs, but it is not itself a C1 improvement signal. Its mandatory role comes only from the separate G1 HIGH/CRITICAL obligation.
+
+This single live A/B is a release gate for correctness and non-regression, not a statistical proof that V6 improves every stochastic model sample. Repeated multi-run A/B analysis may be added later as a V6.x quality metric without blocking the initial V6 release.
 
 ## 5. H3/P2 — same-model LOW Fast Path A/B
 
@@ -181,8 +187,8 @@ A final V6 release claiming both Providers should not mark R2 PASS until this re
 
 | Metric / case | Evidence required for final PASS |
 | --- | --- |
-| Context Recall ↑ | C1 same-model A/B |
-| Context Pollution ↓ | C1 same-model A/B |
+| Context Recall | C1 improves where baseline has headroom; non-regressive equality is allowed at recall ceiling |
+| Context Pollution | C1 decreases pollution where headroom exists; non-regressive equality is allowed at zero pollution |
 | Human Authority = 100% | deterministic H1/H2 + live H1 Human Override |
 | Fast Path Overhead ≈ master | deterministic H3/P2 + LOW Fast Path A/B |
 | G1 HIGH/CRITICAL exploration gate | deterministic high-risk governance fixture + real Provider/runtime proof from R1/R2 |
