@@ -660,22 +660,35 @@ def score(root: Path) -> dict:
             and not candidate["premature_convergence"]
         )
         or (
-            not baseline["independent_exploration_completed"]
-            and candidate["independent_exploration_completed"]
+            not baseline["root_cause_correct"]
+            and candidate["root_cause_correct"]
         )
+    )
+    baseline_at_ceiling = bool(
+        baseline["required_context_recall"] == 1.0
+        and baseline["context_pollution"] == 0.0
+        and not baseline["premature_convergence"]
+        and baseline["root_cause_correct"]
     )
     no_regression = bool(
         candidate["required_context_recall"] >= baseline["required_context_recall"]
         and candidate["context_pollution"] <= baseline["context_pollution"]
         and not candidate["premature_convergence"]
     )
+    comparison_requirement_met = bool(strict_improvement or baseline_at_ceiling)
+    if strict_improvement:
+        comparison_mode = "strict-improvement"
+    elif baseline_at_ceiling:
+        comparison_mode = "non-regressive-at-ceiling"
+    else:
+        comparison_mode = "improvement-required"
     passed = bool(
         controls_valid
         and baseline["model_label_matches_control"]
         and candidate["model_label_matches_control"]
         and candidate["meets_v6_target"]
         and no_regression
-        and strict_improvement
+        and comparison_requirement_met
     )
     return {
         "schema_version": 1,
@@ -693,6 +706,9 @@ def score(root: Path) -> dict:
             "required_context_recall": recall_delta,
             "context_pollution": pollution_delta,
             "strict_improvement": strict_improvement,
+            "baseline_at_ceiling": baseline_at_ceiling,
+            "comparison_requirement_met": comparison_requirement_met,
+            "comparison_mode": comparison_mode,
             "no_regression": no_regression,
         },
         "success_metrics": {
@@ -702,10 +718,13 @@ def score(root: Path) -> dict:
             "fast_path_overhead": "covered separately by H3/P2 deterministic cases",
         },
         "note": (
-            "C1 measures context quality and reports independently attested exploration when it occurs. "
-            "Missing exploration is treated as premature only when the recorded Task risk makes the separate "
-            "G1 HIGH/CRITICAL gate mandatory. Any counted child must still have a semantically completed record, "
-            "a result that does not report NEED_CONTEXT, and a valid installed-Provider attestation."
+            "C1 requires the candidate to meet its absolute target and avoid regression. A strict behavioral "
+            "improvement is required only while the baseline still has measurable C1 headroom; when baseline "
+            "already has recall=1, pollution=0, correct root cause, and no premature convergence, an equally "
+            "correct candidate passes as non-regressive at ceiling. Independent exploration is reported but is "
+            "not itself a C1 improvement signal; missing exploration is premature only when the recorded Task "
+            "risk makes the separate G1 HIGH/CRITICAL gate mandatory. Any counted child must still be semantically "
+            "completed, must not report NEED_CONTEXT, and must have a valid installed-Provider attestation."
         ),
     }
 
