@@ -52,7 +52,25 @@ class V6ABBenchmarkProtocolTests(unittest.TestCase):
             candidate_prompt = Path(control["candidate"]["prompt"]).read_bytes()
             self.assertEqual(baseline_prompt, candidate_prompt)
 
-    def test_score_cannot_pass_from_self_report_without_attested_exploration(self) -> None:
+    @staticmethod
+    def _write_same_result(root: Path, *, selected_files: list[str], self_report_scout: bool = False) -> None:
+        control = json.loads((root / "control.json").read_text(encoding="utf-8"))
+        payload = {
+            "schema_version": 1,
+            "parent_model_label": "same-model-control",
+            "selected_files": selected_files,
+            "root_cause_files": list(BENCH.FIXTURE.manifest()["expected_root_cause"]),
+            "conclusion_before_independent_exploration": False,
+            "independent_exploration_completed": self_report_scout,
+            "governed_task_id": None,
+            "summary": "fixture result",
+        }
+        for side in ("baseline", "candidate"):
+            result = Path(control[side]["result"])
+            result.parent.mkdir(parents=True, exist_ok=True)
+            result.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    def test_equal_ceiling_sample_passes_without_strict_improvement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "ab"
             BENCH.prepare(
@@ -62,28 +80,66 @@ class V6ABBenchmarkProtocolTests(unittest.TestCase):
                 model_label="same-model-control",
                 force=False,
             )
-            control = json.loads((root / "control.json").read_text(encoding="utf-8"))
-            payload = {
-                "schema_version": 1,
-                "parent_model_label": "same-model-control",
-                "selected_files": list(BENCH.FIXTURE.CLASSIFICATION["required"]),
-                "root_cause_files": list(BENCH.FIXTURE.manifest()["expected_root_cause"]),
-                "conclusion_before_independent_exploration": False,
-                "independent_exploration_completed": True,
-                "governed_task_id": None,
-                "summary": "self-reported perfect answer without real Scout evidence",
-            }
-            for side in ("baseline", "candidate"):
-                result = Path(control[side]["result"])
-                result.parent.mkdir(parents=True, exist_ok=True)
-                result.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            self._write_same_result(
+                root,
+                selected_files=list(BENCH.FIXTURE.CLASSIFICATION["required"]),
+            )
+
+            score = BENCH.score(root)
+            self.assertEqual(score["status"], "PASS")
+            self.assertTrue(score["baseline"]["meets_v6_target"])
+            self.assertTrue(score["candidate"]["meets_v6_target"])
+            self.assertTrue(score["delta"]["baseline_at_ceiling"])
+            self.assertFalse(score["delta"]["strict_improvement"])
+            self.assertTrue(score["delta"]["comparison_requirement_met"])
+            self.assertEqual(score["delta"]["comparison_mode"], "non-regressive-at-ceiling")
+
+    def test_equal_non_ceiling_sample_still_requires_improvement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ab"
+            BENCH.prepare(
+                root,
+                baseline_ref="HEAD",
+                candidate_ref="HEAD",
+                model_label="same-model-control",
+                force=False,
+            )
+            selected = list(BENCH.FIXTURE.CLASSIFICATION["required"])
+            selected.append(BENCH.FIXTURE.CLASSIFICATION["decoy"][0])
+            self._write_same_result(root, selected_files=selected)
 
             score = BENCH.score(root)
             self.assertEqual(score["status"], "FAIL")
+            self.assertTrue(score["baseline"]["meets_v6_target"])
+            self.assertTrue(score["candidate"]["meets_v6_target"])
+            self.assertFalse(score["delta"]["baseline_at_ceiling"])
+            self.assertFalse(score["delta"]["strict_improvement"])
+            self.assertFalse(score["delta"]["comparison_requirement_met"])
+            self.assertEqual(score["delta"]["comparison_mode"], "improvement-required")
+
+    def test_score_ignores_self_report_without_attested_exploration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ab"
+            BENCH.prepare(
+                root,
+                baseline_ref="HEAD",
+                candidate_ref="HEAD",
+                model_label="same-model-control",
+                force=False,
+            )
+            self._write_same_result(
+                root,
+                selected_files=list(BENCH.FIXTURE.CLASSIFICATION["required"]),
+                self_report_scout=True,
+            )
+
+            score = BENCH.score(root)
+            self.assertEqual(score["status"], "PASS")
             self.assertTrue(score["controls_valid"])
             self.assertFalse(score["baseline"]["independent_exploration_completed"])
             self.assertFalse(score["candidate"]["independent_exploration_completed"])
             self.assertEqual(score["candidate"]["actual_exploration"]["attested"], [])
+            self.assertEqual(score["delta"]["comparison_mode"], "non-regressive-at-ceiling")
 
     def test_control_tampering_is_detected_before_comparison(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
