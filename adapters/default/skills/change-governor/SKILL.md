@@ -78,9 +78,44 @@ Repeated equivalent pivots require new discriminating capability and may escalat
 
 ## Delegation
 
-LOW work does not use subagents for ceremony. MEDIUM exploration is optional when scope is obvious. Once a Task reaches HIGH/CRITICAL, its independent exploration obligation persists even if later cleanup risk becomes LOW. Do not repeat a completed Scout merely because the Task is closing.
+LOW work does not use subagents for ceremony. MEDIUM exploration remains optional when one or two local anchor reads make the scope and ownership obvious. Once a Task reaches HIGH/CRITICAL, its independent exploration obligation persists even if later cleanup risk becomes LOW. Do not repeat a completed Scout merely because the Task is closing.
 
-Task-level delegation authorization remains explicit. After authorization is granted, prefer the managed one-command facade instead of manually performing request -> runtime -> attestation -> record:
+### Exploration offload economics
+
+Use the expensive parent model for synthesis, decisions, edits, and verification—not for avoidable repository traversal. After at most one or two obvious anchor reads in a governed Investigation, prefer an early read-only Scout when any of these are true:
+
+- ownership is still not localized;
+- the relevant chain crosses modules, layers, state transitions, or lifecycle phases;
+- the next parent action would otherwise be a broad Grep/Read traversal rather than a discriminating engineering check;
+- callers, tests, framework behavior, or a second subsystem can be searched independently of the parent's current reasoning;
+- the Investigation is HIGH/CRITICAL and its question plus initial scope are already stable enough to give a child a precise bounded objective.
+
+Do not delegate merely because a subagent exists. Keep the work in the parent when the answer is already local, deterministic, and cheaper to verify directly.
+
+Choose the cheapest role that matches the retrieval job:
+
+- `source_locator`: exact files, symbols, callers, named tests or logs;
+- `context_scout`: cross-module business/data/state/lifecycle chain;
+- `test_scout`: test coverage, expected evidence, tolerances, regression meaning;
+- `framework_scout`: framework ownership or abstraction semantics that genuinely need more than retrieval.
+
+Default to one Scout, not fan-out. Add another only when the first returns `NEED_CONTEXT`, exposes a genuinely independent second search line, or conflicts with evidence that needs discrimination.
+
+For HIGH/CRITICAL work, satisfy required independent exploration **early** once the Investigation question and bounded starting scope are stable. Do not wait until `record-decision:accepted`, `conclude-investigation`, `pivot-to-change`, or active implementation is blocked by the gate.
+
+After a Scout completes, do not repeat its broad search in the parent. Read only the decisive references needed to validate, synthesize, or modify the system. Child output narrows parent context; it does not replace parent responsibility for the final engineering conclusion.
+
+Task-level delegation authorization remains explicit in Task state. When the offload trigger above is met and no stricter user ceiling applies, the parent should grant the needed read-only exploration authorization itself rather than asking the user merely to permit a same-tier or cheaper read-only Scout. Use `optional` for cost-saving MEDIUM offload and `required` when HIGH/CRITICAL governance requires independent exploration. Stronger-than-parent models still require the separate elevated authorization policy.
+
+```powershell
+python "$Runtime\work.py" --project $ProjectRoot authorize-delegation <task-id> `
+  --decision optional|required `
+  --scope readonly-exploration `
+  --evidence "bounded retrieval offload for ..." `
+  --parent-model <actual-parent-model> --parent-tier luna|terra|sol|unknown
+```
+
+After authorization is granted, prefer the managed one-command facade instead of manually performing request -> runtime -> attestation -> record:
 
 ```powershell
 python "$Runtime\delegate_once.py" <task-id> --project $ProjectRoot `
