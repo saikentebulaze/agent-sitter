@@ -28,6 +28,8 @@ Exit the Fast Path and load `$change-governor` when any material uncertainty app
 
 Formal Investigation work is governed. A production change that is no longer clearly LOW is governed. Risk may rise again later and may fall after the unknown engineering surface is resolved.
 
+Do not spend the parent model on repository-wide exploration before promoting work that is already clearly governed. One or two obvious anchor reads are enough to route; once the uncertainty is cross-module, ownership-related, or retrieval-heavy, load the Governor and apply its Scout offload policy instead of pre-scanning the repository in the parent context.
+
 ## Incremental turns
 
 On follow-up user turns, reassess only what materially changed. A naming tweak does not restart governance; a new cross-step state requirement can. Do not rerun intake/status/skill discovery solely to reconfirm unchanged state. Load detailed policy references only when the current action needs them.
