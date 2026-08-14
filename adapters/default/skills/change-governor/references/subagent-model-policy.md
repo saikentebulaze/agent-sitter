@@ -30,6 +30,18 @@ Default role pairs:
 
 Do not use a stronger model merely because it is available. Do not use a semantic Scout for work that only needs Locator retrieval.
 
+## Exploration offload economics
+
+A read-only Scout is a context-cost optimization tool as well as an independence mechanism. The parent should not consume a high-tier context window doing broad retrieval that a cheaper bounded child can perform independently.
+
+Use a cheap parent triage first: one or two obvious anchor reads are enough to decide whether the work is local or exploration-dominant. Delegate early when ownership is still unknown, the chain crosses modules/lifecycle stages, or the next step would otherwise be broad repository traversal. For HIGH/CRITICAL Investigation work, start the required Scout as soon as the question and bounded starting scope are stable instead of waiting for the final-truth gate to block progress.
+
+Prefer exactly one Scout initially. Choose the cheapest role that matches the job. A second Scout is justified only by `NEED_CONTEXT`, a genuinely independent second search line, or evidence conflict that needs discrimination. Do not fan out merely to increase confidence.
+
+The parent must not mechanically repeat the child's whole search after completion. Re-open only decisive references needed to verify the child's result, integrate it with other evidence, or perform the production change. The parent owns the final conclusion; that does not require duplicating retrieval work.
+
+MEDIUM work remains eligible to stay entirely in the parent when one or two local reads resolve the scope. LOW Fast Path work does not use subagents for ceremony.
+
 ## Independent child context
 
 All current Sitter child roles must use independent context:

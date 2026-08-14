@@ -78,14 +78,26 @@ Repeated equivalent pivots require new discriminating capability and may escalat
 
 ## Delegation
 
-LOW work does not use subagents for ceremony. MEDIUM exploration is optional when scope is obvious. Once a Task reaches HIGH/CRITICAL, its independent exploration obligation persists even if later cleanup risk becomes LOW. Do not repeat a completed Scout merely because the Task is closing.
+LOW work does not use subagents for ceremony. MEDIUM exploration stays optional when one or two local reads make scope/ownership obvious. Once a Task reaches HIGH/CRITICAL, its independent exploration obligation persists even if cleanup risk later falls. Do not repeat a completed Scout merely because the Task is closing.
 
-Task-level delegation authorization remains explicit. After authorization is granted, prefer the managed one-command facade instead of manually performing request -> runtime -> attestation -> record:
+### Exploration offload economics
+
+Use the expensive parent for synthesis, decisions, edits, and verification—not broad retrieval. After at most one or two obvious anchor reads, delegate early when ownership is still unknown, the chain crosses modules/lifecycle stages, or the next parent step would be broad Grep/Read. For HIGH/CRITICAL, satisfy required independent exploration **early** once the question and bounded starting scope are stable; do not wait for a final-truth gate.
+
+Choose the cheapest matching role: `source_locator` for exact symbols/callers/tests, `context_scout` for cross-module state/data flow, `test_scout` for test evidence, and `framework_scout` only for real framework/ownership semantics. Default to one Scout, not fan-out; add another only for `NEED_CONTEXT`, an independent second search line, or evidence conflict.
+
+After a Scout completes, do not repeat its broad search in the parent. Read only decisive references needed to validate, synthesize, or modify the system. If one or two local reads already resolve the question, keep the work in the parent.
+
+Task-level authorization remains explicit in Task state. When this offload trigger is met and no stricter user ceiling applies, the parent should grant read-only exploration itself instead of interrupting the user merely to permit a same-tier or cheaper read-only Scout. Use `optional` for MEDIUM cost-saving offload and `required` for HIGH/CRITICAL independent exploration; stronger-than-parent models still need elevated authorization.
 
 ```powershell
+python "$Runtime\work.py" --project $ProjectRoot authorize-delegation <task-id> `
+  --decision optional|required --scope readonly-exploration `
+  --evidence "bounded retrieval offload for ..." `
+  --parent-model <actual-parent-model> --parent-tier luna|terra|sol|unknown
+
 python "$Runtime\delegate_once.py" <task-id> --project $ProjectRoot `
-  --role context_scout `
-  --target-type investigation --target-ref <inv-id> `
+  --role context_scout --target-type investigation --target-ref <inv-id> `
   --purpose "..." --question "..." --decision-supported "..." `
   --include <scope-or-path>
 ```
