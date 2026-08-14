@@ -56,37 +56,147 @@ def create_investigation_task(project: Path, task_id: str = "demo") -> Path:
     return project / ".agent-work" / task_id
 
 
+def complete_independent_exploration_if_required(
+    project: Path,
+    task: str,
+    investigation: str,
+) -> None:
+    task_path = project / ".agent-work" / task / "task.yaml"
+    data = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+    risk = (data.get("work_risk") or {}).get("current") or {}
+    order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    current_max = max(
+        order.get(str(risk.get("semantic", "low")), 0),
+        order.get(str(risk.get("repository_change", "low")), 0),
+    )
+    if current_max < order["high"]:
+        return
+
+    delegation = data.get("delegation") or {}
+    completed_ids = {
+        str(item.get("id"))
+        for item in delegation.get("completed") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    for planned in delegation.get("planned") or []:
+        if (
+            str((planned.get("target") or {}).get("ref") or "") == investigation
+            and str(planned.get("agent") or "") in {
+                "source_locator", "context_scout", "test_scout", "framework_scout"
+            }
+            and str(planned.get("id") or "") in completed_ids
+        ):
+            return
+
+    authorization = delegation.get("authorization") or {}
+    if authorization.get("status") != "granted":
+        authorized = work(
+            project,
+            "authorize-delegation", task,
+            "--decision", "required",
+            "--scope", "readonly-exploration",
+            "--evidence", "deterministic V6 lifecycle fixture",
+            "--parent-model", "gpt-5.6-terra",
+            "--parent-tier", "terra",
+        )
+        if authorized.returncode:
+            raise AssertionError(authorized.stderr)
+
+    requested = work(
+        project,
+        "request-delegation", task,
+        "--role", "context_scout",
+        "--target-type", "investigation",
+        "--target-ref", investigation,
+        "--purpose", "independent lifecycle fixture exploration",
+        "--question", "Independently inspect the investigation before governed final truth.",
+        "--decision-supported", "Whether the Investigation may form governed final truth.",
+        "--include", ".",
+    )
+    if requested.returncode:
+        raise AssertionError(requested.stderr)
+
+    request_path = project / requested.stdout.strip()
+    data = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+    planned = data["delegation"]["planned"][-1]
+    delegation_id = str(planned["id"])
+    output = request_path.parent / "attempt-01.output.md"
+    record = request_path.parent / "attempt-01.record.yaml"
+    output.write_text(
+        "# Deterministic independent exploration\n\nSynthetic L2 completion only.\n",
+        encoding="utf-8",
+    )
+    record.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "delegation_id": delegation_id,
+                "outcome": "completed",
+                "fixture": "deterministic-l2",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    planned["status"] = "completed"
+    data["delegation"].setdefault("completed", []).append(
+        {
+            "id": delegation_id,
+            "agent": planned["agent"],
+            "model": planned["model"],
+            "tier": planned["tier"],
+            "reasoning_effort": planned["reasoning_effort"],
+            "execution": "native-subagent",
+            "context": {"inheritance": "none"},
+            "output_ref": output.relative_to(project).as_posix(),
+            "record_ref": record.relative_to(project).as_posix(),
+            "evidence_ref": f"fixture:{delegation_id}",
+        }
+    )
+    task_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
 def record_actionable_decision(project: Path, task: str, investigation: str, suffix: str) -> None:
-    commands = [
-        (
-            "record-evidence", task, investigation,
-            "--id", f"evd-{suffix}",
-            "--kind", "experiment",
-            "--source-ref", f"experiments/{suffix}",
-            "--provenance", "bounded fixture evidence",
-            "--reliability", "high",
-        ),
-        (
-            "record-claim", task, investigation,
-            "--id", f"clm-{suffix}",
-            "--statement", "The bounded explanation is supported",
-            "--status", "supported",
-            "--confidence", "high",
-            "--supporting-evidence", f"evd-{suffix}",
-        ),
-        (
-            "record-decision", task, investigation,
-            "--id", f"dec-{suffix}",
-            "--statement", "Proceed with the bounded engineering action",
-            "--status", "accepted",
-            "--claim", f"clm-{suffix}",
-            "--evidence", f"evd-{suffix}",
-        ),
-    ]
-    for command in commands:
-        result = work(project, *command)
-        if result.returncode:
-            raise AssertionError(result.stderr)
+    evidence = work(
+        project,
+        "record-evidence", task, investigation,
+        "--id", f"evd-{suffix}",
+        "--kind", "experiment",
+        "--source-ref", f"experiments/{suffix}",
+        "--provenance", "bounded fixture evidence",
+        "--reliability", "high",
+    )
+    if evidence.returncode:
+        raise AssertionError(evidence.stderr)
+
+    claim = work(
+        project,
+        "record-claim", task, investigation,
+        "--id", f"clm-{suffix}",
+        "--statement", "The bounded explanation is supported",
+        "--status", "supported",
+        "--confidence", "high",
+        "--supporting-evidence", f"evd-{suffix}",
+    )
+    if claim.returncode:
+        raise AssertionError(claim.stderr)
+
+    complete_independent_exploration_if_required(project, task, investigation)
+
+    decision = work(
+        project,
+        "record-decision", task, investigation,
+        "--id", f"dec-{suffix}",
+        "--statement", "Proceed with the bounded engineering action",
+        "--status", "accepted",
+        "--claim", f"clm-{suffix}",
+        "--evidence", f"evd-{suffix}",
+    )
+    if decision.returncode:
+        raise AssertionError(decision.stderr)
 
 
 def create_change_from_investigation(project: Path) -> Path:

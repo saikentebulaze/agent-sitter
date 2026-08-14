@@ -16,11 +16,12 @@ if str(RUNTIME) not in sys.path:
 
 import install as installer_module  # noqa: E402
 from core.managed_projection import MARKER  # noqa: E402
-from project_context import ProjectContext  # noqa: E402
 from providers.codex.projection import (  # noqa: E402
     entrypoint_text,
+    hooks_json_text,
     skill_metadata_text,
     skill_wrapper_text,
+    toml_text,
 )
 
 
@@ -33,6 +34,9 @@ SOURCE_BLOBS = {
     "adapters/default/codex/agents/maintainer-reviewer.toml": "5fb31c4ce049e55efe4e816459f58f6044b221ac",
     "adapters/default/codex/agents/test-scout.toml": "617749ab79722162e9ac985b3459190d8d673ccc",
 }
+
+# V6 may add roles without modifying the frozen V4.1 security/config blobs above.
+ADDITIVE_V6_CODEX_ROLES = {"memory_scout.toml"}
 
 SKILLS = (
     "architecture-health-check",
@@ -84,14 +88,20 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
 
             adapter = ROOT / "adapters" / "default"
             marker = f"# {MARKER}; do not edit.\n"
-            codex_sources = [adapter / "codex" / "config.toml"]
-            codex_sources.extend(sorted((adapter / "codex" / "agents").glob("*.toml")))
-            for source in codex_sources:
-                relative = (
-                    Path(".codex/config.toml")
-                    if source.name == "config.toml"
-                    else Path(".codex/agents") / source.name
-                )
+            config_source = adapter / "codex" / "config.toml"
+            self.assertEqual(
+                (project / ".codex" / "config.toml").read_text(encoding="utf-8"),
+                toml_text(config_source),
+            )
+            self.assertNotIn("SessionStart", toml_text(config_source))
+            self.assertEqual(
+                (project / ".codex" / "hooks.json").read_text(encoding="utf-8"),
+                hooks_json_text(),
+            )
+            self.assertTrue(toml_text(config_source).startswith(marker + config_source.read_text(encoding="utf-8")))
+
+            for source in sorted((adapter / "codex" / "agents").glob("*.toml")):
+                relative = Path(".codex/agents") / source.name
                 with self.subTest(path=str(relative)):
                     self.assertEqual(
                         (project / relative).read_text(encoding="utf-8"),
@@ -102,10 +112,7 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
                 with self.subTest(skill=name):
                     source = adapter / "skills" / name / "SKILL.md"
                     wrapper = project / ".agents" / "skills" / name / "SKILL.md"
-                    self.assertEqual(
-                        wrapper.read_text(encoding="utf-8"),
-                        skill_wrapper_text(source),
-                    )
+                    self.assertEqual(wrapper.read_text(encoding="utf-8"), skill_wrapper_text(source))
                     self.assertNotIn("Before taking any action", wrapper.read_text(encoding="utf-8"))
 
                     metadata_source = adapter / "skills" / name / "agents" / "openai.yaml"
@@ -118,12 +125,7 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
 
             governor_metadata = yaml.safe_load(
                 (
-                    project
-                    / ".agents"
-                    / "skills"
-                    / "change-governor"
-                    / "agents"
-                    / "openai.yaml"
+                    project / ".agents" / "skills" / "change-governor" / "agents" / "openai.yaml"
                 ).read_text(encoding="utf-8")
             )
             self.assertFalse(governor_metadata["policy"]["allow_implicit_invocation"])
@@ -131,11 +133,13 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
             expected = {
                 "AGENTS.md",
                 ".codex/config.toml",
+                ".codex/hooks.json",
                 *{
                     f".codex/agents/{Path(path).name}"
                     for path in SOURCE_BLOBS
                     if "/agents/" in path
                 },
+                *{f".codex/agents/{name}" for name in ADDITIVE_V6_CODEX_ROLES},
                 *{f".agents/skills/{name}/SKILL.md" for name in SKILLS},
                 *{
                     f".agents/skills/{name}/agents/openai.yaml"
@@ -144,12 +148,7 @@ class CodexBehaviorBaselineTests(unittest.TestCase):
                 },
             }
             lock = yaml.safe_load(
-                (
-                    project
-                    / ".harness"
-                    / "sitter"
-                    / "manifest-lock.yaml"
-                ).read_text(encoding="utf-8")
+                (project / ".harness" / "sitter" / "manifest-lock.yaml").read_text(encoding="utf-8")
             )
             actual = {str(key).replace("\\", "/") for key in lock["projections"]}
             self.assertEqual(actual, expected)

@@ -22,6 +22,7 @@ from delegation_validation import validate_delegation_state  # noqa: E402
 from managed_delegation_transaction import (  # noqa: E402
     record_managed_delegation_result,
 )
+from provider_attestation import validate_provider_attestation  # noqa: E402
 from project_context import ProjectContext  # noqa: E402
 from work_graph import load_yaml  # noqa: E402
 
@@ -268,6 +269,21 @@ class ManagedRuntimeTests(unittest.TestCase):
                 evidence["thread_start_params"]["sandbox"],
                 "read-only",
             )
+            runtime_evidence = validate_provider_attestation(
+                self.runtime_packet(project, packet),
+                attestation,
+            )
+            self.assertEqual(runtime_evidence.provider, "codex")
+            self.assertEqual(runtime_evidence.role_id, "source_locator")
+            attestation["observed"]["context_inheritance"] = "full"
+            with self.assertRaisesRegex(
+                CodexManagedRuntimeError,
+                "context_inheritance",
+            ):
+                validate_provider_attestation(
+                    self.runtime_packet(project, packet),
+                    attestation,
+                )
 
     def test_managed_workspace_write_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

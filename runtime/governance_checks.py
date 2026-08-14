@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from common import fail
+from decision_authority import DecisionAuthorityError, human_decision_digest
 
 
 HUMAN_MODES = {"autonomous", "guided", "manual"}
@@ -91,7 +92,55 @@ def validate_human_in_loop(
             fail("manual human-in-loop mode requires a resolved decision checkpoint")
 
 
+def _validate_decision_authority(data: dict) -> None:
+    human = data.get("human_in_loop") or {}
+    status = str((human.get("decision_assessment") or {}).get("status") or "")
+    protocol = data.get("decision_authority_protocol")
+    if protocol not in {None, 1}:
+        fail("unsupported decision_authority_protocol")
+    if status != "resolved":
+        return
+
+    review = data.get("review") or {}
+    execution = review.get("execution") or {}
+    snapshot = execution.get("input_snapshot") or {}
+    knowledge = data.get("knowledge_sync") or {}
+
+    # Pre-V6 schema-v4 Changes may contain resolved human decisions but no
+    # authority protocol/snapshots. Keep them read-compatible. Once any V6
+    # authority marker exists, however, deleting another marker must not make
+    # validation fall open.
+    v6_authority = (
+        protocol == 1
+        or "human_decisions_sha256" in snapshot
+        or "human_decisions_sha256" in knowledge
+    )
+    if not v6_authority:
+        return
+
+    try:
+        digest = human_decision_digest(data)
+    except DecisionAuthorityError as error:
+        fail(str(error))
+
+    if str(review.get("status") or "pending") != "pending":
+        if str(snapshot.get("human_decisions_sha256") or "") != digest:
+            fail(
+                "review does not match the current authoritative human decisions; "
+                "request a new review"
+            )
+
+    if str(knowledge.get("status") or "pending") in {"candidate", "reviewed", "promoted"}:
+        if str(knowledge.get("human_decisions_sha256") or "") != digest:
+            fail(
+                "knowledge candidate does not match the current authoritative human decisions; "
+                "render it again before review/promotion"
+            )
+
+
 def validate_change_closure(data: dict, status: str) -> None:
+    _validate_decision_authority(data)
+
     completion = data.get("completion") or {}
     if not isinstance(completion, dict):
         fail("completion must be a mapping")

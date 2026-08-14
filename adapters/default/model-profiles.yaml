@@ -4,6 +4,9 @@ roles:
   source_locator:
     model_grade: low
     reasoning_effort: low
+  memory_scout:
+    model_grade: low
+    reasoning_effort: low
   context_scout:
     model_grade: low
     reasoning_effort: medium

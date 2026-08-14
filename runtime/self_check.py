@@ -32,12 +32,20 @@ def core_required_assets(context: ProjectContext) -> tuple[Path, ...]:
         context.package_root / "runtime" / "delegation_context.py",
         context.package_root / "runtime" / "delegation_validation.py",
         context.package_root / "runtime" / "delegation_transaction.py",
+        context.package_root / "runtime" / "decision_authority.py",
+        context.package_root / "runtime" / "active_task_index.py",
+        context.package_root / "runtime" / "session_context.py",
+        context.package_root / "runtime" / "session_start_hook.py",
+        context.package_root / "runtime" / "memory_context.py",
+        context.package_root / "runtime" / "memory_scout_once.py",
+        context.package_root / "runtime" / "durable_memory.py",
         context.package_root / "runtime" / "harness.py",
         context.package_root / "runtime" / "_harness_impl.py",
         context.package_root / "runtime" / "knowledge_gate.py",
         context.package_root / "runtime" / "knowledge_tool.py",
         context.package_root / "runtime" / "work.py",
         context.package_root / "runtime" / "work_graph.py",
+        context.package_root / "runtime" / "task_status.py",
         context.package_root / "runtime" / "governed_validation.py",
         context.package_root / "runtime" / "governed_work.py",
         context.package_root / "runtime" / "pivot_transaction.py",
@@ -66,9 +74,7 @@ def core_required_assets(context: ProjectContext) -> tuple[Path, ...]:
 
 
 def run_self_check(context: ProjectContext) -> None:
-    providers = tuple(
-        get_provider(provider_id) for provider_id in registered_providers()
-    )
+    providers = tuple(get_provider(provider_id) for provider_id in registered_providers())
     required = list(core_required_assets(context))
     for provider in providers:
         required.extend(provider.required_assets(context))

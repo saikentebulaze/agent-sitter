@@ -29,6 +29,15 @@ ROLE_SPECS = {
         authority_files=("change.yaml",),
         inline_change_fields=("id", "title", "status", "execution_state", "change_budget"),
     ),
+    "memory_scout": RoleSpec(
+        role="memory_scout",
+        authorization_scope="readonly-exploration",
+        projection="memory-scout-v1",
+        allowed_targets=frozenset({"task"}),
+        authority_files=(),
+        inline_change_fields=(),
+        max_context_supplements=0,
+    ),
     "context_scout": RoleSpec(
         role="context_scout",
         authorization_scope="readonly-exploration",

@@ -5,6 +5,8 @@ title: replace-with-title
 status: proposed # proposed | designed | approved | implementing | verifying | syncing | ready-to-archive | archived
 execution_state: active # active | paused | abandoned
 
+decision_authority_protocol: 1
+
 hold:
   reason:
   investigation_ref:
@@ -107,6 +109,7 @@ knowledge_sync:
   reviewed_at:
   review_evidence:
   deferred_reason:
+  human_decisions_sha256:
 
 archive:
   experiment_cleanup_complete: false

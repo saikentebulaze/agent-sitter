@@ -25,18 +25,46 @@ class DelegateOnceError(RuntimeError):
     pass
 
 
-# Provider children commonly render the structured marker as Markdown emphasis
-# (for example ``**NEED_CONTEXT**``). Match only a line-start structured marker,
-# while allowing one paired emphasis token, so prose that merely mentions the
-# protocol does not become a false need-context result.
+# Provider children may render the need-context contract either as a dedicated
+# Markdown marker (``NEED_CONTEXT`` / ``**NEED_CONTEXT**``) or as a structured
+# status field such as ``status: NEED_CONTEXT`` / ``"status": "NEED_CONTEXT"``.
+# Keep both recognizers line-anchored and value-exact so prose that merely
+# discusses the protocol does not become a false need-context result.
 _NEED_CONTEXT = re.compile(
     r"(?mi)^\s*(?:#{1,6}\s*)?(?:\*\*|__|\*|_)?NEED_CONTEXT(?=(?:\*\*|__|\*|_)?(?:\s|$|[:\-]))"
 )
+_NEED_CONTEXT_STATUS = re.compile(
+    r"""(?mix)
+    ^\s*
+    (?:[-*+]\s*)?
+    \{?\s*
+    (?:\*\*|__|\*|_)?
+    ["'`]?
+    status
+    ["'`]?
+    (?:\*\*|__|\*|_)?
+    \s*[:=]\s*
+    (?:\*\*|__|\*|_)?
+    ["'`]?
+    NEED_CONTEXT
+    ["'`]?
+    (?:\*\*|__|\*|_)?
+    \s*
+    [,;]?
+    \s*
+    \}?
+    \s*$
+    """
+)
+
+
+def reports_need_context(text: str) -> bool:
+    return bool(_NEED_CONTEXT.search(text) or _NEED_CONTEXT_STATUS.search(text))
 
 
 def infer_outcome(output: Path) -> str:
     text = output.read_text(encoding="utf-8")
-    return "need-context" if _NEED_CONTEXT.search(text) else "completed"
+    return "need-context" if reports_need_context(text) else "completed"
 
 
 def _delegation_id(request_path: Path) -> str:

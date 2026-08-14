@@ -10,6 +10,7 @@ from project_context import ProjectContext, resolve_project_context
 
 EXPECTED = {
     "source_locator": ("gpt-5.6-luna", "low"),
+    "memory_scout": ("gpt-5.6-luna", "low"),
     "context_scout": ("gpt-5.6-luna", "medium"),
     "test_scout": ("gpt-5.6-luna", "medium"),
     "framework_scout": ("gpt-5.6-terra", "medium"),

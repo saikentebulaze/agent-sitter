@@ -1,4 +1,4 @@
-"""Scoped Claude Code hook for governed Agent attempts."""
+"""Scoped Claude Code hook for governed Agent attempts and bounded SessionStart continuity."""
 
 from __future__ import annotations
 
@@ -56,18 +56,8 @@ def _write_event(payload: dict) -> None:
     path = directory / f"{envelope['recorded_at_ns']}-{uuid.uuid4().hex}.json"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(
-            descriptor,
-            "w",
-            encoding="utf-8",
-            newline="",
-        ) as stream:
-            json.dump(
-                envelope,
-                stream,
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            json.dump(envelope, stream, ensure_ascii=False, sort_keys=True)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
@@ -259,6 +249,29 @@ def _scope_decision(payload: dict) -> dict:
     }
 
 
+def _session_start_output(payload: dict) -> dict | None:
+    if str(payload.get("hook_event_name") or "") != "SessionStart":
+        return None
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+    if not project_dir:
+        project_dir = str(payload.get("cwd") or "").strip()
+    if not project_dir:
+        return None
+    runtime = Path(project_dir).resolve() / ".harness" / "sitter" / "runtime"
+    if not runtime.is_dir():
+        return None
+    runtime_text = str(runtime)
+    if runtime_text not in sys.path:
+        sys.path.insert(0, runtime_text)
+    try:
+        from session_start_hook import build_hook_output
+
+        return build_hook_output(payload, project_root=Path(project_dir))
+    except (ImportError, OSError, ValueError) as error:
+        print(f"Sitter Claude SessionStart continuity unavailable: {error}", file=sys.stderr)
+        return None
+
+
 def main() -> int:
     try:
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -273,22 +286,16 @@ def main() -> int:
 
     event = str(payload.get("hook_event_name") or "")
     mode = os.environ.get("SITTER_CLAUDE_EXECUTION_MODE", "").strip()
-    agent_id = str(
-        payload.get("agent_id") or payload.get("agentId") or ""
-    ).strip()
+    agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip()
     deny_message = ""
 
     if event == "PreToolUse":
         tool = str(payload.get("tool_name") or "")
         if mode == "native" and not agent_id:
             if tool != "Agent":
-                deny_message = (
-                    f"Sitter governed parent denied tool: {tool or '<missing>'}"
-                )
+                deny_message = f"Sitter governed parent denied tool: {tool or '<missing>'}"
         elif tool not in _ALLOWED_CHILD_TOOLS:
-            deny_message = (
-                f"Sitter governed Agent denied tool: {tool or '<missing>'}"
-            )
+            deny_message = f"Sitter governed Agent denied tool: {tool or '<missing>'}"
         elif os.environ.get(_SCOPE_REQUIRED_ENV, "").strip() == "1":
             payload.update(_scope_decision(payload))
             if payload.get("scope_decision") != "allowed":
@@ -298,19 +305,19 @@ def main() -> int:
                 )
 
     if event in _BLOCKED_EVENTS:
-        deny_message = (
-            f"Sitter governed Agent denied lifecycle event: {event}"
-        )
+        deny_message = f"Sitter governed Agent denied lifecycle event: {event}"
 
     try:
         _write_event(_sanitize(payload))
     except OSError as error:
-        return _deny(
-            f"Sitter Claude hook could not persist evidence: {error}"
-        )
+        return _deny(f"Sitter Claude hook could not persist evidence: {error}")
 
     if deny_message:
         return _deny(deny_message)
+
+    output = _session_start_output(payload)
+    if output is not None:
+        print(json.dumps(output, ensure_ascii=False))
     return 0
 
 

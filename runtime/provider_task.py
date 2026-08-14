@@ -5,11 +5,12 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from active_task_index import index_path, register_active_task
 from core.provider_registry import get_provider
 from governed_validation import validate_governed_work_graph
 from governed_work import PivotTransactionError, initialize_task as initialize_legacy_task
 from project_context import ProjectContext
-from review_transaction import atomic_write_yaml
+from review_transaction import atomic_write_text, atomic_write_yaml
 from work_graph import load_yaml, now_iso
 
 
@@ -28,13 +29,7 @@ def initialize_provider_task(
     change_id: str | None = None,
     change_title: str | None = None,
 ) -> Path:
-    """Create one Task and immutably bind its orchestrator Provider.
-
-    The retained V4/V5-A transaction remains the source of Task and Change
-    creation semantics. V5-B adds the Provider binding immediately after that
-    transaction and removes every newly-created artifact if the binding or the
-    final work-graph validation fails.
-    """
+    """Create one Task, bind its Provider, and register bounded continuity state."""
 
     provider_id = str(provider_id).strip()
     get_provider(provider_id)
@@ -48,6 +43,8 @@ def initialize_provider_task(
     )
     task_existed = task_root.exists()
     change_existed = bool(change_root and change_root.exists())
+    active_index = index_path(context)
+    index_snapshot = active_index.read_bytes() if active_index.exists() else None
 
     try:
         root = initialize_legacy_task(
@@ -80,8 +77,14 @@ def initialize_provider_task(
         )
         atomic_write_yaml(task_path, task)
         validate_governed_work_graph(context, root)
+        register_active_task(context, root)
         return root
     except BaseException:
+        if index_snapshot is None:
+            active_index.unlink(missing_ok=True)
+        else:
+            active_index.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(active_index, index_snapshot.decode("utf-8"))
         if not task_existed and task_root.exists():
             shutil.rmtree(task_root, ignore_errors=True)
         if change_root is not None and not change_existed and change_root.exists():

@@ -61,6 +61,7 @@ def effective_model_tiers(context: ProjectContext) -> dict[str, str]:
     result = dict(MODEL_TIERS)
     for role in (
         "source_locator",
+        "memory_scout",
         "context_scout",
         "test_scout",
         "framework_scout",
@@ -110,7 +111,7 @@ def load_native_agent_profile(context: ProjectContext, role: str) -> AgentProfil
             model_grade=selection.model_grade,
             model_config_sha256=selection.config_sha256,
         )
-    raise AgentProfileError(f"unknown Claude role: {role}")
+    raise AgentProfileError(f"unknown Codex role: {role}")
 
 
 # Provider-local compatibility for callers that import this module directly.

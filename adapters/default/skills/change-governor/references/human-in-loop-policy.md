@@ -48,9 +48,29 @@ For a normal HIGH/CRITICAL task, use at most one pre-implementation design check
 
 A HIGH/CRITICAL task may not enter implementation while `decision_assessment.status` is `pending` or `required`. A `resolved` status requires every listed decision to contain an explicit user decision and evidence. A `not-required` status requires a concrete reason explaining why no material fork exists.
 
+## Decision authority
+
+Once the user explicitly chooses an option, the **user decision is authoritative project state**. The Agent's earlier recommendation remains historical/advisory context only.
+
+For example, if the Agent recommends A and the user chooses B:
+
+- Design must describe B, not A;
+- implementation tasks and production changes must implement B;
+- Verification must test B's promised behavior;
+- Reviewer must judge the work against B and BLOCK a silent return to A;
+- Knowledge, Open Threads, Watchpoints, and other durable Memory must preserve B as the decision unless the user explicitly reconsiders it.
+
+Do not reinterpret a recommendation as the decision. Do not silently supersede, normalize, or "improve" the user's choice because the Agent still prefers another option.
+
+New V6 Changes use `decision_authority_protocol: 1`. Review packets freeze a compact projection containing only decision ID, question, `user_decision`, and evidence; recommendations are deliberately excluded. If the authoritative decisions change after review starts, that review is stale and must be repeated. Durable Knowledge candidates are likewise bound to the current decision digest before promotion.
+
+This authority check is mechanical provenance, not a claim that a validator can semantically understand arbitrary Markdown or source code. Black-box acceptance must still test whether the Agent follows the user's decision in Design and implementation behavior.
+
 ## Reviewer responsibility
 
 The Reviewer must check whether the implementation contains an unrecorded material semantic decision. Missing algorithm/state/acceptance decisions are Architecture or Numerical Evidence findings, not mere documentation issues.
+
+For a V6 review, the `decision_authority` projection in the frozen review request is authoritative. If Design, diff, Verification, or proposed durable Memory contradicts it, return BLOCK even if the contradictory behavior matches the Agent's earlier recommendation.
 
 ## Long-term evaluation
 

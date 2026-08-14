@@ -226,8 +226,17 @@ def build_request_packet(
         start.append(
             {"ref": project_relative(context, path), "reason": "explicit start anchor"}
         )
+        if profile.name == "memory_scout":
+            if not path.is_file():
+                raise DelegationContextError("memory_scout start ref must be a frozen recall file")
+            authority_refs.append(
+                _ref(context, path, "frozen deterministic memory recall packet")
+            )
+            snapshot_paths.append(path)
 
     supplements = list(supplemental_refs or [])
+    if profile.name == "memory_scout" and supplements:
+        raise DelegationContextError("memory_scout context supplements are not allowed")
     for item in supplements:
         path = _safe_project_path(context, str(item.get("ref") or ""), "supplement ref")
         if not path.exists():
@@ -242,6 +251,7 @@ def build_request_packet(
         snapshot_paths.append(path)
 
     authority_refs = _dedupe_refs(authority_refs)
+    memory_role = profile.name == "memory_scout"
     packet = {
         "schema_version": 1,
         "delegation": {
@@ -260,7 +270,7 @@ def build_request_packet(
         },
         "context_policy": {
             "inheritance": "none",
-            "additional_repository_search": "bounded",
+            "additional_repository_search": "forbidden" if memory_role else "bounded",
             "scope_expansion": "forbidden",
             "max_context_supplements": policy.max_context_supplements,
         },
@@ -287,15 +297,26 @@ def build_request_packet(
             "proposed_patch": "withheld",
         },
         "output_contract": {
-            "required_sections": [
-                "key conclusions",
-                "evidence index",
-                "unresolved questions",
-            ],
-            "forbidden": [
-                "production file modifications",
-                "unsupported root-cause claims",
-            ],
+            "required_sections": (
+                [
+                    "relevant recovered memory",
+                    "freshness and conflict status",
+                    "current-fact candidates",
+                    "historical leads requiring re-verification",
+                ]
+                if memory_role
+                else ["key conclusions", "evidence index", "unresolved questions"]
+            ),
+            "forbidden": (
+                [
+                    "production file modifications",
+                    "new engineering conclusions",
+                    "upgrading suspect or unknown memory to current fact",
+                    "archived Task history scanning",
+                ]
+                if memory_role
+                else ["production file modifications", "unsupported root-cause claims"]
+            ),
             "need_context_status": "NEED_CONTEXT",
         },
         "context_supplements": supplements,

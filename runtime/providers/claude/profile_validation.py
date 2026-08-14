@@ -8,6 +8,7 @@ from providers.claude.profiles import load_native_agent_profile
 
 EXPECTED_ROLES = (
     "source_locator",
+    "memory_scout",
     "context_scout",
     "framework_scout",
     "test_scout",

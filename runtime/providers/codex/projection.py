@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 from core.managed_projection import MARKER, PACKAGE_NAME
@@ -20,6 +25,36 @@ Read `.harness/{PACKAGE_NAME}/adapters/default/bootstrap/AGENTS.md.template` as 
 
 def toml_text(source: Path) -> str:
     return f"# {MARKER}; do not edit.\n" + source.read_text(encoding="utf-8")
+
+
+def hooks_json_text() -> str:
+    argv = [
+        str(Path(sys.executable).resolve()),
+        f".harness/{PACKAGE_NAME}/runtime/session_start_hook.py",
+    ]
+    command = (
+        subprocess.list2cmdline(argv)
+        if os.name == "nt"
+        else shlex.join(argv)
+    )
+    payload = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "startup|resume|clear|compact",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": command,
+                            "timeout": 5,
+                            "statusMessage": "Loading bounded Sitter task continuity",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def agent_toml_text(context: ProjectContext, source: Path) -> str:
