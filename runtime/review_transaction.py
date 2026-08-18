@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 import yaml
 
 from artifact_consistency import file_sha256, git_diff_sha256
+from change_validation import ChangeValidationError, validate_change_in_process
 from decision_authority import human_decision_digest
 from production_snapshot import production_snapshot_sha256
 from project_context import ProjectContext
@@ -249,20 +248,10 @@ def _matches_recorded_review(
 
 
 def _run_validator(context: ProjectContext, change: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(context.package_root / "runtime" / "validate_change.py"),
-            str(change),
-        ],
-        cwd=context.project_root,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-    )
-    if result.returncode:
-        message = result.stderr.strip() or result.stdout.strip() or "change validation failed"
-        raise ReviewTransactionError(message)
+    try:
+        validate_change_in_process(change)
+    except ChangeValidationError as error:
+        raise ReviewTransactionError(str(error)) from error
 
 
 def _archive_request(change: Path, packet: dict) -> None:
