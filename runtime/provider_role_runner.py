@@ -69,7 +69,9 @@ def _requested_profile(profile) -> dict:
             "hook_projection_ref": profile.hook_projection_ref,
             "hook_projection_sha256": profile.hook_projection_sha256,
         }
-    raise ProviderRoleRunnerError(f"managed read-only role is unsupported for provider: {profile.provider}")
+    raise ProviderRoleRunnerError(
+        f"managed read-only role is unsupported for provider: {profile.provider}"
+    )
 
 
 def build_role_packet(
@@ -110,18 +112,22 @@ def _default_executor(provider_id: str):
     )
 
 
-def run_readonly_role(
+def run_readonly_packet(
     context: ProjectContext,
-    task_value: str | Path,
+    packet: dict,
     *,
-    role: str,
     message: str,
     executor_factory: Callable[[str], Callable] | None = None,
 ) -> RoleRunResult:
     if not message.strip():
         raise ProviderRoleRunnerError("read-only role message must not be empty")
-    packet, task = build_role_packet(context, task_value, role=role)
     provider_id = str((packet.get("runtime") or {}).get("provider") or "")
+    if not provider_id:
+        raise ProviderRoleRunnerError("frozen role packet has no runtime Provider")
+    requested = packet.get("requested_profile") or {}
+    role_id = str(requested.get("role_id") or requested.get("agent") or "")
+    if not role_id:
+        raise ProviderRoleRunnerError("frozen role packet has no requested role")
     executor = (executor_factory or _default_executor)(provider_id)
     try:
         output, attestation, evidence = executor(
@@ -132,11 +138,9 @@ def run_readonly_role(
         normalized = validate_provider_attestation(packet, attestation)
     except (ValueError, RuntimeError, OSError) as error:
         raise ProviderRoleRunnerError(str(error)) from error
-    requested = packet.get("requested_profile") or {}
-    role_id = str(requested.get("role_id") or requested.get("agent") or "")
     if normalized.provider != provider_id or normalized.role_id != role_id:
         raise ProviderRoleRunnerError(
-            "normalized runtime evidence does not match the requested Provider role"
+            "normalized runtime evidence does not match the frozen Provider role"
         )
     execution = attestation.get("execution") or {}
     session_ref = str(execution.get("session_ref") or normalized.raw_evidence_ref or "")
@@ -150,4 +154,21 @@ def run_readonly_role(
         attestation=attestation,
         evidence=evidence,
         session_ref=session_ref,
+    )
+
+
+def run_readonly_role(
+    context: ProjectContext,
+    task_value: str | Path,
+    *,
+    role: str,
+    message: str,
+    executor_factory: Callable[[str], Callable] | None = None,
+) -> RoleRunResult:
+    packet, _ = build_role_packet(context, task_value, role=role)
+    return run_readonly_packet(
+        context,
+        packet,
+        message=message,
+        executor_factory=executor_factory,
     )
