@@ -141,6 +141,11 @@ def _validate_decision_authority(data: dict) -> None:
 def validate_change_closure(data: dict, status: str) -> None:
     _validate_decision_authority(data)
 
+    readiness_protocol = data.get("candidate_readiness_protocol")
+    if readiness_protocol not in {None, 1}:
+        fail("unsupported candidate_readiness_protocol")
+    v62 = readiness_protocol == 1
+
     completion = data.get("completion") or {}
     if not isinstance(completion, dict):
         fail("completion must be a mapping")
@@ -157,14 +162,32 @@ def validate_change_closure(data: dict, status: str) -> None:
     user_review_status = str(user_review.get("status", "pending"))
     if user_review_status not in USER_REVIEW_STATUSES:
         fail(f"invalid user_review.status: {user_review_status}")
-    if user_review_status in {"approved", "changes-requested"}:
+    if user_review_status in {"approved", "changes-requested"} or (
+        v62 and user_review_status == "not-required"
+    ):
         non_empty_string(user_review.get("evidence"), "user_review.evidence")
+    if v62 and user_review_status in {"approved", "changes-requested", "not-required"}:
+        non_empty_string(user_review.get("reviewed_at"), "user_review.reviewed_at")
+
+    if v62 and status == "candidate-review":
+        if not implementation_complete:
+            fail("candidate-review requires implementation_complete")
+        if not ready_for_user_review:
+            fail("candidate-review requires ready_for_user_review")
+        if user_review_status not in {"pending", "approved", "not-required"}:
+            fail("candidate-review has an invalid user review state")
 
     if status in {"verifying", "syncing", "ready-to-archive", "archived"}:
         if not implementation_complete:
             fail("implementation is not marked complete")
-    if status in {"syncing", "ready-to-archive", "archived"} and not ready_for_user_review:
+    if v62 and status in {"verifying", "syncing", "ready-to-archive", "archived"}:
+        if not ready_for_user_review:
+            fail("V6.2 final verification requires a Candidate Ready change")
+        if user_review_status not in {"approved", "not-required"}:
+            fail("user acceptance is required before final verification")
+    elif status in {"syncing", "ready-to-archive", "archived"} and not ready_for_user_review:
         fail("change is not marked ready for user review")
+
     if status in {"ready-to-archive", "archived"}:
         if user_review_status not in {"approved", "not-required"}:
             fail("user review is not approved")
