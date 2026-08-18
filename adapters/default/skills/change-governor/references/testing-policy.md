@@ -24,6 +24,38 @@
 
 根据功能适用性选择层级，不要求每项全部具备。
 
+## Candidate Readiness
+
+使用 `candidate_readiness_protocol: 1` 的新 Production Change，在要求用户验收前必须先达到 **Candidate Ready**。Candidate Ready 的含义不是“代码写完”或“单元测试通过”，而是 Agent 已经用与 Change 风险和业务语义相匹配的自动化证据证明：当前实现值得占用用户的验收时间。
+
+Readiness Contract 必须在实现前随 Design/Tasks 一起确定，不能在代码写完后为了迁就当前结果再挑选最容易通过的验收标准。结构化 `readiness.criteria` 是权威来源；每条最新结果都必须通过 Harness 事务记录，并绑定当时的 production snapshot。
+
+Readiness assurance class：
+
+- `standard`：局部、确定性、无复杂外部行为的实现，可以 focused regression/build 为主；
+- `behavioral`：必须包含 integration 或 representative external-behavior evidence；
+- `numerical`：必须包含 `representative-case`、`benchmark` 或 `analytical-check`，不能只靠局部单测成为 Candidate Ready。
+
+Readiness criterion 第一版只使用：`build`、`focused-test`、`integration`、`representative-case`、`benchmark`、`analytical-check`、`invariant`、`other`。具体业务含义放在 description，不把 Harness 变成某个 CAE/产品专用框架。
+
+典型流程：
+
+```powershell
+python "$Runtime\harness.py" --project $ProjectRoot record-readiness <change-id> `
+  --criterion <criterion-id> --result pass|fail `
+  --command-or-entry "..." --evidence "..." [--observed "..."]
+
+python "$Runtime\harness.py" --project $ProjectRoot finalize-readiness <change-id>
+```
+
+`finalize-readiness` 只判断已有证据能否构成 Candidate Readiness，不替 Agent 运行测试。如果生产/测试文件在证据之后发生变化，对应 readiness evidence 必须按 stale 处理并重跑。
+
+## 用户验收边界
+
+Candidate Readiness 之后仍需完成 test finalization 和独立 readiness review，之后才能进入 `candidate-review`。`candidate-review` 是硬人类停点：在 `user_review.status: pending` 时，不运行 final/full regression、Knowledge、Learning closeout、archive 或额外 reviewer。用户批准后才进入正式 final verification。
+
+这不是把半成品交给用户：focused verification、代表性业务/工程算例、测试清理和独立 reviewer 都发生在 Candidate Ready 之前；被推迟的是昂贵的最终广泛回归和 closure。
+
 ## 测试分类
 
 ### 永久测试
@@ -64,7 +96,7 @@ LOW Fast Path 可以运行已有测试，也可以在行为完全明确时增加
 
 ## Test Finalization
 
-新版本 Production Change 在进入正式 Review/后续收尾前必须执行明确的测试清理动作，而不是直接把 `test_cleanup_complete` 手工改成 `true`。
+新版本 Production Change 在独立 readiness Review 前必须执行明确的测试清理动作，而不是直接把 `test_cleanup_complete` 手工改成 `true`。
 
 运行：
 
@@ -82,7 +114,7 @@ Finalizer 会扫描当前 Git 工作区中的测试变化，并要求每个相�
 
 仍存在且未升级的 temporary test、未分类的新/改测试都会使 Finalization 失败。
 
-成功后 Harness 写入 `test-finalization.yaml` 作为事务证据，并由该事务设置 `test_cleanup_complete` 和 `test_cleanup_evidence`。对于使用 `test_cleanup_protocol: 1` 的 Change，缺少该证据时正式 Review/后续生命周期必须失败。
+成功后 Harness 写入 `test-finalization.yaml` 作为事务证据，并由该事务设置 `test_cleanup_complete` 和 `test_cleanup_evidence`。对于使用 `test_cleanup_protocol: 1` 的 Change，缺少该证据时 independent readiness Review/后续生命周期必须失败。
 
 ## 清理原则
 
