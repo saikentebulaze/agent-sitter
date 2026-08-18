@@ -24,6 +24,7 @@ from project_context import ProjectContext  # noqa: E402
 from readiness import (  # noqa: E402
     ReadinessError,
     finalize_readiness,
+    freeze_readiness_contract,
     record_readiness,
     validate_readiness_contract,
 )
@@ -68,7 +69,7 @@ def base_change(change_id: str, *, assurance: str = "standard") -> dict:
     return {
         "schema_version": 4,
         "id": change_id,
-        "status": "implementing",
+        "status": "approved",
         "execution_state": "active",
         "candidate_readiness_protocol": 1,
         "readiness": {
@@ -100,6 +101,13 @@ def base_change(change_id: str, *, assurance: str = "standard") -> dict:
             }
         },
     }
+
+
+def freeze_then_implement(context: ProjectContext, change: Path) -> None:
+    freeze_readiness_contract(context, change)
+    data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
+    data["status"] = "implementing"
+    write_yaml(change / "change.yaml", data)
 
 
 class V62CandidateReadinessTests(unittest.TestCase):
@@ -143,11 +151,31 @@ class V62CandidateReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ReadinessError, "numerical readiness requires"):
             validate_readiness_contract(data)
 
+    def test_readiness_contract_cannot_change_after_freeze(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            change = project / "changes" / "active" / "chg"
+            write_yaml(change / "change.yaml", base_change("chg"))
+            freeze_then_implement(context, change)
+            data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
+            data["readiness"]["criteria"][0]["description"] = "easier criterion after implementation"
+            write_yaml(change / "change.yaml", data)
+            with self.assertRaisesRegex(ReadinessError, "changed after it was frozen"):
+                record_readiness(
+                    context,
+                    "chg",
+                    criterion_id="focused",
+                    result="pass",
+                    command_or_entry="pytest focused",
+                    evidence="test-log.txt",
+                )
+
     def test_readiness_evidence_becomes_stale_after_production_edit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project, context = make_project(Path(directory))
             change = project / "changes" / "active" / "chg"
             write_yaml(change / "change.yaml", base_change("chg", assurance="numerical"))
+            freeze_then_implement(context, change)
 
             record_readiness(
                 context,
@@ -167,6 +195,7 @@ class V62CandidateReadinessTests(unittest.TestCase):
             project, context = make_project(Path(directory))
             change = project / "changes" / "active" / "chg"
             write_yaml(change / "change.yaml", base_change("chg"))
+            freeze_then_implement(context, change)
 
             record_readiness(
                 context,
@@ -198,6 +227,7 @@ class V62CandidateReadinessTests(unittest.TestCase):
             project, context = make_project(Path(directory))
             change = project / "changes" / "active" / "chg"
             write_yaml(change / "change.yaml", base_change("chg"))
+            freeze_then_implement(context, change)
             record_readiness(
                 context,
                 "chg",
