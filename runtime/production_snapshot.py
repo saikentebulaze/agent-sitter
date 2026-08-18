@@ -36,7 +36,12 @@ def _excluded(path: str) -> bool:
 
 
 def _tracked_patch(project_root: Path) -> bytes:
-    output = _run_git(project_root, ["diff", "HEAD", "--binary", "--", "."], binary=True)
+    pathspec = [".", *[f":(exclude){prefix}**" for prefix in EXCLUDED_PREFIXES]]
+    output = _run_git(
+        project_root,
+        ["diff", "HEAD", "--binary", "--", *pathspec],
+        binary=True,
+    )
     return bytes(output)
 
 
@@ -46,7 +51,11 @@ def _untracked_paths(project_root: Path) -> list[str]:
         ["ls-files", "--others", "--exclude-standard", "-z"],
         binary=True,
     )
-    values = [item.decode("utf-8", errors="surrogateescape") for item in bytes(output).split(b"\0") if item]
+    values = [
+        item.decode("utf-8", errors="surrogateescape")
+        for item in bytes(output).split(b"\0")
+        if item
+    ]
     return sorted(path for path in values if not _excluded(path))
 
 
@@ -66,7 +75,9 @@ def production_snapshot_sha256(project_root: Path) -> str:
         if not path.is_file():
             continue
         digest.update(b"untracked\0")
-        digest.update(relative.replace("\\", "/").encode("utf-8", errors="surrogateescape"))
+        digest.update(
+            relative.replace("\\", "/").encode("utf-8", errors="surrogateescape")
+        )
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")
