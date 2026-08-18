@@ -64,8 +64,11 @@ def _has_head(project_root: Path) -> bool:
     return result.returncode == 0
 
 
+def _pathspec() -> list[str]:
+    return [".", *[f":(exclude){prefix}**" for prefix in EXCLUDED_PREFIXES]]
+
+
 def _tracked_patch(project_root: Path) -> bytes:
-    pathspec = [".", *[f":(exclude){prefix}**" for prefix in EXCLUDED_PREFIXES]]
     args = ["diff"]
     if _has_head(project_root):
         args.append("HEAD")
@@ -74,7 +77,7 @@ def _tracked_patch(project_root: Path) -> bytes:
         # tracked state available; ordinary working-tree files are captured by
         # the untracked pass below.
         args.append("--cached")
-    args.extend(["--binary", "--", *pathspec])
+    args.extend(["--binary", "--", *_pathspec()])
     result = _run_git(project_root, args, binary=True)
     return bytes(result.stdout)
 
@@ -119,3 +122,62 @@ def production_snapshot_sha256(project_root: Path) -> str:
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _tracked_review_diff(project_root: Path) -> str:
+    args = ["diff"]
+    if _has_head(project_root):
+        args.append("HEAD")
+    else:
+        args.append("--cached")
+    args.extend(["--no-ext-diff", "--unified=3", "--", *_pathspec()])
+    result = _run_git(project_root, args, binary=True)
+    return bytes(result.stdout).decode("utf-8", errors="replace")
+
+
+def _untracked_review_diff(project_root: Path, relative: str) -> str:
+    path = project_root / Path(relative)
+    if not path.is_file():
+        return ""
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return (
+            f"diff --git a/{relative} b/{relative}\n"
+            "new file mode 100644\n"
+            f"Binary untracked file; size={len(raw)} sha256={digest}\n"
+        )
+    lines = text.splitlines()
+    body = "\n".join("+" + line for line in lines)
+    if text.endswith("\n"):
+        body += "\n"
+    return (
+        f"diff --git a/{relative} b/{relative}\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        f"+++ b/{relative}\n"
+        f"@@ -0,0 +1,{max(1, len(lines))} @@\n"
+        f"{body}"
+    )
+
+
+def production_review_diff(project_root: Path) -> str:
+    """Return a reviewer-readable projection of the exact production surface.
+
+    Claude managed reviewers intentionally have no Bash tool, so formal Review
+    cannot rely on the child executing `git diff`. Harness freezes the readable
+    diff itself. The caller must still bind this artifact to a Production
+    Snapshot and re-check that snapshot before recording the Review.
+    """
+
+    parts: list[str] = []
+    tracked = _tracked_review_diff(project_root).rstrip()
+    if tracked:
+        parts.append(tracked)
+    for relative in _untracked_paths(project_root):
+        rendered = _untracked_review_diff(project_root, relative).rstrip()
+        if rendered:
+            parts.append(rendered)
+    return ("\n\n".join(parts).rstrip() + "\n") if parts else "# no production/test diff\n"
