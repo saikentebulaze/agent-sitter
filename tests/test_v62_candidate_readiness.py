@@ -29,6 +29,11 @@ from readiness import (  # noqa: E402
     validate_readiness_contract,
 )
 from reference_resolver import resolve_change_ref, resolve_task_ref  # noqa: E402
+from review_transaction import (  # noqa: E402
+    ReviewTransactionError,
+    _validate_snapshot,
+    current_snapshot,
+)
 
 
 def run_git(project: Path, *args: str) -> None:
@@ -78,6 +83,7 @@ def base_change(change_id: str, *, assurance: str = "standard") -> dict:
             "criteria": [criterion],
             "latest_results": [],
         },
+        "change_budget": {"allowed_files": ["tracked.txt"], "explicit_non_goals": [], "adjacent_issues": []},
         "methodology": {
             "test_cleanup_protocol": 1,
             "test_cleanup_complete": True,
@@ -98,7 +104,8 @@ def base_change(change_id: str, *, assurance: str = "standard") -> dict:
             "decision_assessment": {
                 "status": "not-required",
                 "reasons": ["no unresolved material design fork"],
-            }
+            },
+            "decisions": [],
         },
     }
 
@@ -108,6 +115,19 @@ def freeze_then_implement(context: ProjectContext, change: Path) -> None:
     data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
     data["status"] = "implementing"
     write_yaml(change / "change.yaml", data)
+
+
+def write_review_inputs(change: Path) -> None:
+    for name, text in (
+        ("design.md", "# Design\n\nStable approved design.\n"),
+        ("tasks.md", "# Tasks\n\n- implement approved behavior\n"),
+        ("verification.md", "# Verification\n\nCandidate evidence projection.\n"),
+    ):
+        (change / name).write_text(text, encoding="utf-8")
+    write_yaml(
+        change / "test-finalization.yaml",
+        {"schema_version": 1, "change_id": change.name, "decisions": []},
+    )
 
 
 class V62CandidateReadinessTests(unittest.TestCase):
@@ -189,6 +209,47 @@ class V62CandidateReadinessTests(unittest.TestCase):
             (project / "tracked.txt").write_text("changed after evidence\n", encoding="utf-8")
             with self.assertRaisesRegex(ReadinessError, "stale: representative"):
                 finalize_readiness(context, "chg")
+
+    def test_review_snapshot_v2_ignores_verification_projection_but_not_production(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            change = project / "changes" / "active" / "chg"
+            write_yaml(change / "change.yaml", base_change("chg"))
+            write_review_inputs(change)
+            freeze_then_implement(context, change)
+            record_readiness(
+                context,
+                "chg",
+                criterion_id="focused",
+                result="pass",
+                command_or_entry="pytest focused",
+                evidence="test-log.txt",
+            )
+            finalize_readiness(context, "chg")
+            frozen = current_snapshot(context, change)
+            expected = {
+                "snapshot_protocol": 2,
+                **{key: frozen[key] for key in (
+                    "production_sha256",
+                    "design_sha256",
+                    "tasks_sha256",
+                    "change_budget_sha256",
+                    "human_decisions_sha256",
+                    "readiness_contract_sha256",
+                    "readiness_evidence_sha256",
+                    "test_finalization_sha256",
+                )},
+            }
+
+            (change / "verification.md").write_text(
+                "# Verification\n\nMore final PASS evidence was rendered.\n",
+                encoding="utf-8",
+            )
+            _validate_snapshot(expected, current_snapshot(context, change))
+
+            (project / "tracked.txt").write_text("production changed\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReviewTransactionError, "production_sha256"):
+                _validate_snapshot(expected, current_snapshot(context, change))
 
     def test_candidate_review_is_hard_human_stop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
