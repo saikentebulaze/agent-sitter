@@ -220,6 +220,30 @@ def _build_request(
     return packet, task_id
 
 
+def _validate_frozen_production_input(
+    context: ProjectContext,
+    packet: dict,
+) -> None:
+    production = packet.get("production_diff") or {}
+    ref = str(production.get("ref") or "").strip()
+    expected_diff = str(production.get("sha256") or "").strip()
+    expected_production = str(production.get("production_sha256") or "").strip()
+    if not ref or not expected_diff or not expected_production:
+        raise AtomicReviewError("review request has incomplete frozen production diff metadata")
+    path = (context.project_root / ref).resolve()
+    try:
+        path.relative_to(context.project_root.resolve())
+    except ValueError as error:
+        raise AtomicReviewError("frozen production diff escapes the project") from error
+    if not path.is_file():
+        raise AtomicReviewError("frozen production diff is missing")
+    actual_diff = _text_sha256(path.read_text(encoding="utf-8"))
+    if actual_diff != expected_diff:
+        raise AtomicReviewError("frozen production diff changed during reviewer execution")
+    if production_snapshot_sha256(context.project_root) != expected_production:
+        raise AtomicReviewError("production/test state changed during reviewer execution")
+
+
 def run_atomic_review(
     context: ProjectContext,
     change_value: str | Path,
@@ -268,6 +292,7 @@ def run_atomic_review(
             )
         else:
             run = role_runner(context, packet, packet["instructions"])
+        _validate_frozen_production_input(context, packet)
         verdict = parse_review_verdict(run.output)
         atomic_write_text(output_path, run.output)
         atomic_write_yaml(attestation_path, run.attestation)
