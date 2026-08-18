@@ -25,6 +25,7 @@ from readiness import (
     record_readiness,
     validate_readiness_contract,
 )
+from review_transaction import current_snapshot as _review_current_snapshot
 from review_transaction import record_review as _record_review
 
 
@@ -65,7 +66,8 @@ def command_review_packet(
     """Create review input that freezes assurance and explicit user decisions."""
 
     data = _impl.load_yaml(change / "change.yaml")
-    if data.get("candidate_readiness_protocol") == 1:
+    v62 = data.get("candidate_readiness_protocol") == 1
+    if v62:
         try:
             validate_readiness_contract(data)
         except ReadinessError as error:
@@ -83,6 +85,12 @@ def command_review_packet(
             raise _impl.ReviewTransactionError(
                 "test finalization must complete before independent readiness review"
             )
+        if methodology.get("test_cleanup_protocol") == 1 and not (
+            change / "test-finalization.yaml"
+        ).is_file():
+            raise _impl.ReviewTransactionError(
+                "test finalization artifact is missing before independent readiness review"
+            )
 
     _base_command_review_packet(
         context,
@@ -95,7 +103,34 @@ def command_review_packet(
     authority = _current_authority(change)
     packet["assurance_snapshot"] = _assurance_snapshot(change)
     packet["decision_authority"] = authority
-    packet.setdefault("input_snapshot", {})["human_decisions_sha256"] = authority["sha256"]
+    input_snapshot = packet.setdefault("input_snapshot", {})
+    input_snapshot["human_decisions_sha256"] = authority["sha256"]
+    if v62:
+        current = _review_current_snapshot(context, change)
+        input_snapshot.update(
+            {
+                "snapshot_protocol": 2,
+                "production_sha256": current["production_sha256"],
+                "change_budget_sha256": current["change_budget_sha256"],
+                "human_decisions_sha256": current["human_decisions_sha256"],
+                "readiness_contract_sha256": current["readiness_contract_sha256"],
+                "readiness_evidence_sha256": current["readiness_evidence_sha256"],
+                "test_finalization_sha256": current["test_finalization_sha256"],
+            }
+        )
+        if not all(
+            str(input_snapshot.get(key) or "").strip()
+            for key in (
+                "production_sha256",
+                "readiness_contract_sha256",
+                "readiness_evidence_sha256",
+                "test_finalization_sha256",
+            )
+        ):
+            packet_path.unlink(missing_ok=True)
+            raise _impl.ReviewTransactionError(
+                "V6.2 review snapshot is incomplete after readiness/test finalization"
+            )
     packet["instructions"] = (
         str(packet.get("instructions") or "")
         + " Resolved user decisions in decision_authority are authoritative. "
