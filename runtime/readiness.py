@@ -28,6 +28,7 @@ CRITERION_KINDS = {
 RESULTS = {"pass", "fail"}
 EXTERNAL_BEHAVIOR_KINDS = {"integration", "representative-case", "benchmark", "analytical-check"}
 NUMERICAL_KINDS = {"representative-case", "benchmark", "analytical-check"}
+FREEZE_STATUSES = {"proposed", "designed", "approved"}
 
 
 class ReadinessError(ValueError):
@@ -111,6 +112,37 @@ def readiness_evidence_digest(data: dict) -> str:
     return _digest(readiness.get("latest_results") or [])
 
 
+def _require_frozen_contract(data: dict) -> str:
+    readiness = data.get("readiness") or {}
+    expected = str(readiness.get("contract_sha256") or "").strip()
+    if not expected:
+        raise ReadinessError("Readiness Contract is not frozen; run freeze-readiness before implementation evidence")
+    actual = readiness_contract_digest(data)
+    if expected != actual:
+        raise ReadinessError("Readiness Contract changed after it was frozen")
+    return expected
+
+
+def freeze_readiness_contract(context: ProjectContext, change_value: str | Path) -> str:
+    ref = resolve_change_ref(context, change_value)
+    data = _load(ref.yaml_path)
+    validate_readiness_contract(data)
+    if data.get("candidate_readiness_protocol") != 1:
+        raise ReadinessError("Change does not use candidate_readiness_protocol 1")
+    status = str(data.get("status") or "")
+    if status not in FREEZE_STATUSES:
+        raise ReadinessError("Readiness Contract must be frozen before implementation begins")
+    readiness = data["readiness"]
+    digest = readiness_contract_digest(data)
+    existing = str(readiness.get("contract_sha256") or "").strip()
+    if existing and existing != digest:
+        raise ReadinessError("Readiness Contract already has a different frozen digest")
+    readiness["contract_sha256"] = digest
+    readiness.setdefault("frozen_at", now_iso())
+    atomic_write_yaml(ref.yaml_path, data)
+    return digest
+
+
 def record_readiness(
     context: ProjectContext,
     change_value: str | Path,
@@ -130,6 +162,7 @@ def record_readiness(
     validate_readiness_contract(data)
     if data.get("candidate_readiness_protocol") != 1:
         raise ReadinessError("Change does not use candidate_readiness_protocol 1")
+    _require_frozen_contract(data)
     readiness = data["readiness"]
     criteria = {str(item["id"]): item for item in readiness["criteria"]}
     if criterion_id not in criteria:
@@ -150,7 +183,6 @@ def record_readiness(
     ]
     readiness["latest_results"] = [*previous, entry]
     readiness["status"] = "pending" if result == "pass" else "fail"
-    readiness["contract_sha256"] = readiness_contract_digest(data)
     readiness["evidence_sha256"] = readiness_evidence_digest(data)
     readiness["production_snapshot"] = {"sha256": snapshot, "captured_at": now_iso()}
     readiness["achieved_at"] = None
@@ -166,6 +198,7 @@ def finalize_readiness(context: ProjectContext, change_value: str | Path) -> dic
     validate_readiness_contract(data)
     if data.get("candidate_readiness_protocol") != 1:
         raise ReadinessError("Change does not use candidate_readiness_protocol 1")
+    _require_frozen_contract(data)
     readiness = data["readiness"]
     current_snapshot = production_snapshot_sha256(context.project_root)
     results = {str(item.get("criterion_id")): item for item in readiness.get("latest_results") or []}
@@ -196,7 +229,6 @@ def finalize_readiness(context: ProjectContext, change_value: str | Path) -> dic
             parts.append("failed: " + ", ".join(failed))
         raise ReadinessError("Candidate Readiness incomplete; " + "; ".join(parts))
     readiness["status"] = "pass"
-    readiness["contract_sha256"] = readiness_contract_digest(data)
     readiness["evidence_sha256"] = readiness_evidence_digest(data)
     readiness["production_snapshot"] = {"sha256": current_snapshot, "captured_at": now_iso()}
     readiness["achieved_at"] = now_iso()
