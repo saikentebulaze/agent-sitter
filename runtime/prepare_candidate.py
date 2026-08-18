@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 from change_lifecycle import ChangeLifecycleError, advance_change
+from evidence_projection import EvidenceProjectionError, render_evidence
 from finalize_tests import (
     TestHygieneError,
     _parse_classifications,
@@ -49,6 +50,10 @@ def prepare_candidate(
             retained=retained_map,
             preexisting=preexisting_map,
         )
+        # Refresh human-readable projections before the reviewer starts. The
+        # projection lives under `changes/` and therefore cannot mutate the
+        # Production Snapshot that the review freezes.
+        render_evidence(context, ref.root)
         review = run_atomic_review(
             context,
             ref.root,
@@ -57,7 +62,13 @@ def prepare_candidate(
             executor_factory=executor_factory,
             role_runner=role_runner,
         )
-    except (ReadinessError, TestHygieneError, AtomicReviewError, ValueError) as error:
+    except (
+        ReadinessError,
+        TestHygieneError,
+        EvidenceProjectionError,
+        AtomicReviewError,
+        ValueError,
+    ) as error:
         raise PrepareCandidateError(str(error)) from error
 
     result = {
