@@ -5,6 +5,12 @@ from pathlib import Path
 
 from common import load_json_or_yaml_like, fail
 from governance_checks import validate_change_closure, validate_human_in_loop
+from production_snapshot import ProductionSnapshotError, production_snapshot_sha256
+from readiness import (
+    ReadinessError,
+    readiness_contract_digest,
+    validate_readiness_contract,
+)
 from work_graph import WorkGraphError, validate_change_graph_shape
 
 REQUIRED = [
@@ -12,7 +18,7 @@ REQUIRED = [
     "verification.md", "knowledge-sync.md", "archive-summary.md",
 ]
 STATUSES = {
-    "proposed", "designed", "approved", "implementing",
+    "proposed", "designed", "approved", "implementing", "candidate-review",
     "verifying", "syncing", "ready-to-archive", "archived",
 }
 REVIEW_STATUS = {"pending", "pass", "warn", "block"}
@@ -20,9 +26,20 @@ REMEDIATION_ROUTES = {"implementation", "awaiting-production-design"}
 RISK_LEVELS = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 PLANNING_LEVELS = {"none", "brief", "full"}
 TDD_MODES = {"not-applicable", "targeted", "required"}
-MODEL_TIERS = {"luna", "terra", "sol"}
+LEGACY_MODEL_TIERS = {"luna", "terra", "sol"}
+PROVIDER_MODEL_GRADES = {"low", "medium", "high"}
 REVIEW_AGENTS = {"maintainer_reviewer", "deep_reviewer"}
 SEVERITY = {"pending": -1, "pass": 0, "warn": 1, "block": 2}
+V2_SNAPSHOT_KEYS = (
+    "production_sha256",
+    "design_sha256",
+    "tasks_sha256",
+    "change_budget_sha256",
+    "human_decisions_sha256",
+    "readiness_contract_sha256",
+    "readiness_evidence_sha256",
+    "test_finalization_sha256",
+)
 
 
 def non_empty_string(value: object, name: str) -> str:
@@ -31,16 +48,26 @@ def non_empty_string(value: object, name: str) -> str:
     return value.strip()
 
 
+def _require_digest(snapshot: dict, key: str, label: str) -> None:
+    value = str(snapshot.get(key) or "").strip()
+    if not value:
+        fail(f"{label}.{key} must be a non-empty value")
+    if len(value) < 12:
+        fail(f"{label}.{key} is too short to identify a frozen input")
+
+
 def validate_input_snapshot(snapshot: object, label: str) -> None:
     if not isinstance(snapshot, dict):
         fail(f"{label} must be a mapping")
-    for key in ("design_sha256", "tasks_sha256", "diff_sha256", "verification_sha256"):
-        raw_value = snapshot.get(key)
-        value = str(raw_value).strip() if raw_value is not None else ""
-        if not value:
-            fail(f"{label}.{key} must be a non-empty value")
-        if len(value) < 12:
-            fail(f"{label}.{key} is too short to identify a frozen input")
+    protocol = int(snapshot.get("snapshot_protocol") or 1)
+    if protocol == 1:
+        for key in ("design_sha256", "tasks_sha256", "diff_sha256", "verification_sha256"):
+            _require_digest(snapshot, key, label)
+        return
+    if protocol != 2:
+        fail(f"unsupported {label}.snapshot_protocol: {protocol}")
+    for key in V2_SNAPSHOT_KEYS:
+        _require_digest(snapshot, key, label)
 
 
 def validate_review_execution(execution: object, *, expected_round: int | None = None) -> None:
@@ -52,14 +79,10 @@ def validate_review_execution(execution: object, *, expected_round: int | None =
     tier = non_empty_string(execution.get("tier"), "review.execution.tier").lower()
     method = non_empty_string(execution.get("method"), "review.execution.method")
     non_empty_string(execution.get("output_ref"), "review.execution.output_ref")
-    non_empty_string(execution.get("evidence_ref"), "review.execution.evidence_ref")
+    evidence_ref = non_empty_string(execution.get("evidence_ref"), "review.execution.evidence_ref")
 
     if agent not in REVIEW_AGENTS:
         fail(f"unrecognized reviewer agent: {agent}")
-    if tier not in MODEL_TIERS:
-        fail(f"invalid reviewer tier: {tier}")
-    if method != "native-subagent":
-        fail("review.execution.method must be native-subagent")
 
     round_number = execution.get("round")
     if not isinstance(round_number, int) or round_number < 1:
@@ -67,18 +90,65 @@ def validate_review_execution(execution: object, *, expected_round: int | None =
     if expected_round is not None and round_number != expected_round:
         fail("review execution round does not match review history")
 
-    if agent == "maintainer_reviewer":
-        if model != "gpt-5.6-terra" or tier != "terra":
-            fail("normal maintainer reviewer must use the configured Terra role")
-    elif agent == "deep_reviewer":
-        if model != "gpt-5.6-sol" or tier != "sol":
-            fail("deep reviewer must use the configured Sol role")
+    protocol = int(execution.get("review_protocol") or 1)
+    if protocol == 1:
+        if tier not in LEGACY_MODEL_TIERS:
+            fail(f"invalid reviewer tier: {tier}")
+        if method != "native-subagent":
+            fail("review.execution.method must be native-subagent")
+        if agent == "maintainer_reviewer":
+            if model != "gpt-5.6-terra" or tier != "terra":
+                fail("normal maintainer reviewer must use the configured Terra role")
+        elif agent == "deep_reviewer":
+            if model != "gpt-5.6-sol" or tier != "sol":
+                fail("deep reviewer must use the configured Sol role")
+            non_empty_string(
+                execution.get("elevated_authorization_ref"),
+                "review.execution.elevated_authorization_ref",
+            )
+        validate_input_snapshot(execution.get("input_snapshot"), "review.execution.input_snapshot")
+        return
+
+    if protocol != 2:
+        fail(f"unsupported review.execution.review_protocol: {protocol}")
+    if tier not in PROVIDER_MODEL_GRADES:
+        fail(f"invalid provider reviewer grade: {tier}")
+    if method != "provider-managed-readonly":
+        fail("review protocol 2 must use provider-managed-readonly")
+    provider = non_empty_string(execution.get("provider"), "review.execution.provider")
+    if provider not in {"codex", "claude"}:
+        fail(f"unsupported review Provider: {provider}")
+    runtime_method = non_empty_string(
+        execution.get("runtime_method"), "review.execution.runtime_method"
+    )
+    expected_runtime = {
+        "codex": "app-server-isolated-agent",
+        "claude": "claude-managed-agent",
+    }[provider]
+    if runtime_method != expected_runtime:
+        fail(
+            f"review runtime method does not match Provider {provider}: {runtime_method}"
+        )
+    session_ref = non_empty_string(execution.get("session_ref"), "review.execution.session_ref")
+    if evidence_ref != session_ref:
+        fail("review.execution.evidence_ref must match the attested runtime session")
+    non_empty_string(execution.get("attestation_ref"), "review.execution.attestation_ref")
+    non_empty_string(
+        execution.get("runtime_evidence_ref"), "review.execution.runtime_evidence_ref"
+    )
+    if agent == "maintainer_reviewer" and tier != "medium":
+        fail("maintainer reviewer must use the configured medium model grade")
+    if agent == "deep_reviewer":
+        if tier != "high":
+            fail("deep reviewer must use the configured high model grade")
         non_empty_string(
             execution.get("elevated_authorization_ref"),
             "review.execution.elevated_authorization_ref",
         )
-
-    validate_input_snapshot(execution.get("input_snapshot"), "review.execution.input_snapshot")
+    snapshot = execution.get("input_snapshot") or {}
+    if int(snapshot.get("snapshot_protocol") or 1) != 2:
+        fail("review protocol 2 requires input snapshot protocol 2")
+    validate_input_snapshot(snapshot, "review.execution.input_snapshot")
 
 
 def validate_methodology(data: dict, review: dict, status: str) -> None:
@@ -107,7 +177,7 @@ def validate_methodology(data: dict, review: dict, status: str) -> None:
         fail("unsupported methodology.test_cleanup_protocol")
 
     review_started = str(review.get("status", "pending")) != "pending"
-    if review_started or status in {"syncing", "ready-to-archive", "archived"}:
+    if review_started or status in {"candidate-review", "syncing", "ready-to-archive", "archived"}:
         if temporary:
             fail("temporary/development-only tests must be removed or merged before review")
         if not bool(methodology.get("test_cleanup_complete", False)):
@@ -119,7 +189,9 @@ def validate_test_cleanup_evidence(path: Path, data: dict, review: dict, status:
     if methodology.get("test_cleanup_protocol") != 1:
         return
     review_started = str(review.get("status", "pending")) != "pending"
-    if not review_started and status not in {"syncing", "ready-to-archive", "archived"}:
+    if not review_started and status not in {
+        "candidate-review", "syncing", "ready-to-archive", "archived"
+    }:
         return
 
     ref = non_empty_string(
@@ -226,7 +298,7 @@ def validate_review_history(history: object, review: dict, status: str) -> None:
             }
         ]
         if blocked_rounds and blocked_rounds[-1] == len(history) - 1:
-            if status in {"syncing", "ready-to-archive", "archived"}:
+            if status in {"candidate-review", "verifying", "syncing", "ready-to-archive", "archived"}:
                 fail("blocked review requires a later review round before completion")
     elif review.get("status") != "pending":
         fail("completed review requires review_history provenance")
@@ -253,6 +325,49 @@ def validate_verification_evidence(verification: dict, status: str) -> None:
         fail("ready-to-archive change requires structured verification evidence")
 
 
+def validate_candidate_readiness(path: Path, data: dict, status: str, review: dict) -> None:
+    if data.get("candidate_readiness_protocol") != 1:
+        return
+    try:
+        validate_readiness_contract(data)
+    except ReadinessError as error:
+        fail(str(error))
+    readiness = data.get("readiness") or {}
+    if status in {"implementing", "candidate-review", "verifying", "syncing", "ready-to-archive", "archived"}:
+        frozen = str(readiness.get("contract_sha256") or "")
+        if not frozen:
+            fail("V6.2 Readiness Contract must be frozen before implementation")
+        if frozen != readiness_contract_digest(data):
+            fail("V6.2 Readiness Contract changed after it was frozen")
+    if status not in {"candidate-review", "verifying", "syncing", "ready-to-archive", "archived"}:
+        return
+    if readiness.get("status") != "pass":
+        fail("Candidate Readiness must pass before candidate/final verification states")
+    if review.get("status") not in {"pass", "warn"}:
+        fail("independent Candidate Readiness Review has not passed")
+    project_root = path.resolve().parents[2]
+    try:
+        current = production_snapshot_sha256(project_root)
+    except ProductionSnapshotError as error:
+        fail(str(error))
+    readiness_snapshot = str((readiness.get("production_snapshot") or {}).get("sha256") or "")
+    if readiness_snapshot != current:
+        fail("Candidate Readiness is stale because production/test files changed")
+    execution = review.get("execution") or {}
+    snapshot = execution.get("input_snapshot") or {}
+    if int(snapshot.get("snapshot_protocol") or 1) == 2:
+        if str(snapshot.get("production_sha256") or "") != current:
+            fail("independent review is stale because production/test files changed")
+        if str(snapshot.get("readiness_contract_sha256") or "") != str(
+            readiness.get("contract_sha256") or ""
+        ):
+            fail("independent review does not match the current Readiness Contract")
+        if str(snapshot.get("readiness_evidence_sha256") or "") != str(
+            readiness.get("evidence_sha256") or ""
+        ):
+            fail("independent review does not match the current Readiness evidence")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=Path)
@@ -274,11 +389,12 @@ def main() -> None:
         fail(f"invalid status: {status}")
     execution_state = str(data.get("execution_state", ""))
     if execution_state == "paused" and status in {
-        "verifying", "syncing", "ready-to-archive", "archived",
+        "candidate-review", "verifying", "syncing", "ready-to-archive", "archived",
     }:
-        fail("paused change cannot verify, sync, or archive")
+        fail("paused change cannot enter candidate review, verify, sync, or archive")
     if execution_state == "abandoned" and status in {
-        "approved", "implementing", "verifying", "syncing", "ready-to-archive", "archived",
+        "approved", "implementing", "candidate-review", "verifying", "syncing",
+        "ready-to-archive", "archived",
     }:
         fail("abandoned change cannot remain in an advancing lifecycle state")
 
@@ -322,11 +438,12 @@ def main() -> None:
     validate_methodology(data, review, status)
     validate_test_cleanup_evidence(path, data, review, status)
     validate_verification_evidence(verification, status)
+    validate_candidate_readiness(path, data, status, review)
     validate_human_in_loop(
         data,
         semantic_risk=semantic_risk,
         advanced=status in {
-            "approved", "implementing", "verifying", "syncing",
+            "approved", "implementing", "candidate-review", "verifying", "syncing",
             "ready-to-archive", "archived",
         },
     )
@@ -337,14 +454,17 @@ def main() -> None:
         if review.get(key) == "block"
     ]
     if review.get("status") == "block" or blocked_dimensions:
-        if status in {"verifying", "syncing", "ready-to-archive", "archived"}:
+        if status in {"candidate-review", "verifying", "syncing", "ready-to-archive", "archived"}:
             fail("review is BLOCK; remediation is required before verification can continue")
         remediation = data.get("remediation") or {}
         route = remediation.get("route")
         if route not in REMEDIATION_ROUTES:
             fail("review is BLOCK; remediation route is required")
-        if not bool(remediation.get("within_approved_scope", False)):
-            fail("review is BLOCK; remediation must stay within the approved scope")
+        within = bool(remediation.get("within_approved_scope", False))
+        if route == "implementation" and not within:
+            fail("implementation remediation must stay within the approved scope")
+        if route == "awaiting-production-design" and within:
+            fail("design remediation must not claim to remain within approved scope")
         if status == "implementing" and route != "implementation":
             fail("implementation remediation must route to implementation")
         if status == "designed" and route != "awaiting-production-design":
@@ -352,7 +472,7 @@ def main() -> None:
 
     if (
         status in {
-            "approved", "implementing", "verifying",
+            "approved", "implementing", "candidate-review", "verifying",
             "syncing", "ready-to-archive", "archived",
         }
         and repository_risk in {"high", "critical"}
