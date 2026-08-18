@@ -126,19 +126,22 @@ def _require_frozen_contract(data: dict) -> str:
 def freeze_readiness_contract(context: ProjectContext, change_value: str | Path) -> str:
     ref = resolve_change_ref(context, change_value)
     data = _load(ref.yaml_path)
-    validate_readiness_contract(data)
-    if data.get("candidate_readiness_protocol") != 1:
-        raise ReadinessError("Change does not use candidate_readiness_protocol 1")
+    protocol = data.get("candidate_readiness_protocol")
+    if protocol not in {None, 1}:
+        raise ReadinessError("unsupported candidate_readiness_protocol")
     status = str(data.get("status") or "")
     if status not in FREEZE_STATUSES:
         raise ReadinessError("Readiness Contract must be frozen before implementation begins")
+    data["candidate_readiness_protocol"] = 1
+    validate_readiness_contract(data)
     readiness = data["readiness"]
     digest = readiness_contract_digest(data)
     existing = str(readiness.get("contract_sha256") or "").strip()
     if existing and existing != digest:
         raise ReadinessError("Readiness Contract already has a different frozen digest")
     readiness["contract_sha256"] = digest
-    readiness.setdefault("frozen_at", now_iso())
+    if not str(readiness.get("frozen_at") or "").strip():
+        readiness["frozen_at"] = now_iso()
     atomic_write_yaml(ref.yaml_path, data)
     return digest
 
