@@ -48,8 +48,9 @@ class ProviderRoleRunnerTests(unittest.TestCase):
             self.assertEqual(packet["runtime"]["provider"], "codex")
             self.assertEqual(requested["agent"], "maintainer_reviewer")
             self.assertEqual(requested["sandbox_mode"], "read-only")
+            self.assertEqual(requested["tier"], "terra")
+            self.assertEqual(requested["model_grade"], "medium")
             self.assertTrue(requested["model"])
-            self.assertTrue(requested["tier"])
 
     def test_claude_packet_freezes_provider_specific_projection_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -59,6 +60,7 @@ class ProviderRoleRunnerTests(unittest.TestCase):
             requested = packet["requested_profile"]
             self.assertEqual(packet["runtime"]["provider"], "claude")
             self.assertEqual(requested["role_id"], "maintainer_reviewer")
+            self.assertEqual(requested["model_grade"], "medium")
             self.assertEqual(requested["write_isolation"], "tool-restricted")
             for key in (
                 "profile_source_sha256",
