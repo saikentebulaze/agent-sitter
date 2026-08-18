@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -9,6 +11,7 @@ import yaml
 from decision_authority import authority_projection
 from provider_role_runner import (
     ProviderRoleRunnerError,
+    RoleRunResult,
     build_role_packet,
     run_readonly_packet,
 )
@@ -38,6 +41,16 @@ def _load(path: Path) -> dict:
     if not isinstance(data, dict):
         raise AtomicReviewError(f"expected YAML mapping: {path}")
     return data
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _preflight(change: Path, data: dict) -> None:
@@ -136,7 +149,11 @@ def _build_request(
             )
         },
     }
-    missing = [key for key, value in input_snapshot.items() if key != "snapshot_protocol" and not str(value or "").strip()]
+    missing = [
+        key
+        for key, value in input_snapshot.items()
+        if key != "snapshot_protocol" and not str(value or "").strip()
+    ]
     if missing:
         raise AtomicReviewError("review snapshot is incomplete: " + ", ".join(missing))
 
@@ -145,7 +162,9 @@ def _build_request(
     except ValueError as error:
         raise AtomicReviewError(str(error)) from error
     packet = {
+        "schema_version": 2,
         "review_protocol": 2,
+        "project_root": str(context.project_root.resolve()),
         "change_id": data.get("id") or change.name,
         "task_id": task_id,
         "round": round_number,
@@ -162,7 +181,9 @@ def _build_request(
         "input_snapshot": input_snapshot,
         "decision_authority": authority,
         "inputs": {
-            name.removesuffix(".md").replace("-", "_"): project_relative(context, change / name)
+            name.removesuffix(".md").replace("-", "_"): project_relative(
+                context, change / name
+            )
             for name in ("proposal.md", "design.md", "tasks.md", "verification.md")
         },
     }
@@ -179,9 +200,12 @@ def run_atomic_review(
     role: str = "maintainer_reviewer",
     elevated_authorization_ref: str | None = None,
     executor_factory: Callable[[str], Callable] | None = None,
+    role_runner: Callable[[ProjectContext, dict, str], RoleRunResult] | None = None,
 ) -> dict:
     if role not in {"maintainer_reviewer", "deep_reviewer"}:
-        raise AtomicReviewError("atomic review role must be maintainer_reviewer or deep_reviewer")
+        raise AtomicReviewError(
+            "atomic review role must be maintainer_reviewer or deep_reviewer"
+        )
     change_ref = resolve_change_ref(context, change_value)
     change = change_ref.root
     data = _load(change_ref.yaml_path)
@@ -198,36 +222,45 @@ def run_atomic_review(
 
     task_ref = resolve_task_ref(context, task_id)
     attempt = uuid.uuid4().hex[:12]
-    staging = task_ref.root / "review-staging" / f"{change.name}-round-{packet['round']}-{attempt}"
+    staging = (
+        task_ref.root
+        / "review-staging"
+        / f"{change.name}-round-{packet['round']}-{attempt}"
+    )
     output_path = staging / "reviewer-output.md"
     attestation_path = staging / "attestation.yaml"
     evidence_path = staging / "runtime-evidence.yaml"
+    execution_request_sha256 = _canonical_sha256(packet)
     try:
-        run = run_readonly_packet(
-            context,
-            {
-                "schema_version": 2,
-                "project_root": str(context.project_root.resolve()),
-                "task_id": task_id,
-                "runtime": packet["runtime"],
-                "requested_profile": packet["requested_profile"],
-            },
-            message=packet["instructions"],
-            executor_factory=executor_factory,
-        )
+        if role_runner is None:
+            run = run_readonly_packet(
+                context,
+                packet,
+                message=packet["instructions"],
+                executor_factory=executor_factory,
+            )
+        else:
+            run = role_runner(context, packet, packet["instructions"])
         verdict = parse_review_verdict(run.output)
         atomic_write_text(output_path, run.output)
         atomic_write_yaml(attestation_path, run.attestation)
         atomic_write_yaml(evidence_path, run.evidence)
 
         current_packet = _load(request_path)
-        execution_method = str((run.attestation.get("execution") or {}).get("method") or "")
+        if _canonical_sha256(current_packet) != execution_request_sha256:
+            raise AtomicReviewError(
+                "review request changed between freeze and Provider execution"
+            )
+        execution_method = str(
+            (run.attestation.get("execution") or {}).get("method") or ""
+        )
         current_packet["runtime_execution"] = {
             "provider": run.provider,
             "execution_method": execution_method,
             "session_ref": run.session_ref,
             "attestation_ref": project_relative(context, attestation_path),
             "evidence_ref": project_relative(context, evidence_path),
+            "execution_request_sha256": execution_request_sha256,
         }
         atomic_write_yaml(request_path, current_packet)
         recorded, idempotent = record_review(
@@ -244,6 +277,7 @@ def run_atomic_review(
         ProviderRoleRunnerError,
         ReviewVerdictError,
         ReviewTransactionError,
+        AtomicReviewError,
         ValueError,
         OSError,
     ) as error:
