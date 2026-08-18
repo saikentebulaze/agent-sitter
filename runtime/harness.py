@@ -21,6 +21,7 @@ from project_context import ProjectContext, resolve_project_context
 from readiness import (
     ReadinessError,
     finalize_readiness,
+    freeze_readiness_contract,
     record_readiness,
     validate_readiness_contract,
 )
@@ -65,7 +66,10 @@ def command_review_packet(
 
     data = _impl.load_yaml(change / "change.yaml")
     if data.get("candidate_readiness_protocol") == 1:
-        validate_readiness_contract(data)
+        try:
+            validate_readiness_contract(data)
+        except ReadinessError as error:
+            raise _impl.ReviewTransactionError(str(error)) from error
         readiness = data.get("readiness") or {}
         if readiness.get("status") != "pass":
             raise _impl.ReviewTransactionError(
@@ -216,6 +220,11 @@ def _validate_v62_gate(change: Path, data: dict) -> None:
             raise ReadinessError("candidate-review requires implementation_complete")
         if completion.get("ready_for_user_review") is not True:
             raise ReadinessError("candidate-review requires ready_for_user_review")
+    if user_review.get("status") in {"approved", "changes-requested", "not-required"}:
+        if not str(user_review.get("evidence") or "").strip():
+            raise ReadinessError("decided user_review requires evidence")
+        if not str(user_review.get("reviewed_at") or "").strip():
+            raise ReadinessError("decided user_review requires reviewed_at")
     if status in {"verifying", "syncing", "ready-to-archive", "archived"}:
         if user_review.get("status") not in {"approved", "not-required"}:
             raise ReadinessError("user acceptance is required before final verification")
@@ -259,7 +268,13 @@ def command_status(context: ProjectContext, change: Path) -> None:
 
 
 def _run_v62_command(argv: list[str]) -> bool:
-    commands = {"record-readiness", "finalize-readiness", "advance", "user-review"}
+    commands = {
+        "freeze-readiness",
+        "record-readiness",
+        "finalize-readiness",
+        "advance",
+        "user-review",
+    }
     command = next((value for value in argv if value in commands), None)
     if command is None:
         return False
@@ -267,6 +282,9 @@ def _run_v62_command(argv: list[str]) -> bool:
     parser = argparse.ArgumentParser(description="Sitter V6.2 Candidate Readiness commands")
     parser.add_argument("--project", type=Path, default=Path.cwd())
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    freeze = subparsers.add_parser("freeze-readiness")
+    freeze.add_argument("change")
 
     record = subparsers.add_parser("record-readiness")
     record.add_argument("change")
@@ -294,7 +312,9 @@ def _run_v62_command(argv: list[str]) -> bool:
     args = parser.parse_args(argv)
     context = resolve_project_context(args.project)
     try:
-        if args.command == "record-readiness":
+        if args.command == "freeze-readiness":
+            print(f"readiness contract frozen: {freeze_readiness_contract(context, args.change)}")
+        elif args.command == "record-readiness":
             record_readiness(
                 context,
                 args.change,
