@@ -6,7 +6,7 @@ status: proposed # proposed | designed | approved | implementing | candidate-rev
 execution_state: active # active | paused | abandoned
 
 decision_authority_protocol: 1
-candidate_readiness_protocol: 1
+candidate_readiness_protocol:
 
 hold:
   reason:
@@ -83,6 +83,7 @@ readiness:
       description: directly affected behavior has focused regression coverage
   latest_results: []
   contract_sha256:
+  frozen_at:
   evidence_sha256:
   production_snapshot:
     sha256:
