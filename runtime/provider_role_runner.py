@@ -27,16 +27,30 @@ class RoleRunResult:
     session_ref: str
 
 
+_CODEX_TIER_TO_GRADE = {
+    "luna": "low",
+    "terra": "medium",
+    "sol": "high",
+}
+
+
 def _requested_profile(profile) -> dict:
     if profile.provider == "codex":
+        grade = _CODEX_TIER_TO_GRADE.get(profile.tier)
+        if grade is None:
+            raise ProviderRoleRunnerError(
+                f"unrecognized Codex legacy tier for Provider role: {profile.tier}"
+            )
         return {
             "agent": profile.role_id,
             "role_id": profile.role_id,
             "runtime_role": profile.runtime_role,
             "model": profile.model,
             "model_selector": profile.model,
+            # Codex managed runtime still proves its native legacy tier. Review
+            # Protocol 2 uses model_grade for Provider-neutral governance.
             "tier": profile.tier,
-            "model_grade": profile.tier,
+            "model_grade": grade,
             "reasoning_effort": profile.reasoning_effort,
             "sandbox_mode": "read-only",
             "write_isolation": profile.write_isolation,
