@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -9,12 +11,30 @@ from pathlib import Path
 import yaml
 
 from artifact_consistency import file_sha256, git_diff_sha256
+from decision_authority import human_decision_digest
+from production_snapshot import production_snapshot_sha256
 from project_context import ProjectContext
 
 
 REVIEW_STATUS = {"pass", "warn", "block"}
 REMEDIATION_ROUTES = {"implementation", "awaiting-production-design"}
 SEVERITY = {"pass": 0, "warn": 1, "block": 2}
+LEGACY_SNAPSHOT_KEYS = (
+    "design_sha256",
+    "tasks_sha256",
+    "diff_sha256",
+    "verification_sha256",
+)
+V2_SNAPSHOT_KEYS = (
+    "production_sha256",
+    "design_sha256",
+    "tasks_sha256",
+    "change_budget_sha256",
+    "human_decisions_sha256",
+    "readiness_contract_sha256",
+    "readiness_evidence_sha256",
+    "test_finalization_sha256",
+)
 
 
 class ReviewTransactionError(ValueError):
@@ -86,19 +106,47 @@ def project_relative(context: ProjectContext, path: Path) -> str:
         raise ReviewTransactionError(f"path is outside project: {path}") from error
 
 
+def _mapping_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def current_snapshot(context: ProjectContext, change: Path) -> dict:
+    data = load_yaml(change / "change.yaml")
+    readiness = data.get("readiness") or {}
+    finalization = change / "test-finalization.yaml"
     return {
+        # Legacy protocol-1 fields remain available for old review packets.
         "design_sha256": file_sha256(change / "design.md"),
         "tasks_sha256": file_sha256(change / "tasks.md"),
         "diff_sha256": git_diff_sha256(context.project_root),
         "verification_sha256": file_sha256(change / "verification.md"),
+        # V6.2 protocol-2 fields freeze semantic production/readiness inputs.
+        "production_sha256": production_snapshot_sha256(context.project_root),
+        "change_budget_sha256": _mapping_sha256(data.get("change_budget") or {}),
+        "human_decisions_sha256": human_decision_digest(data),
+        "readiness_contract_sha256": str(readiness.get("contract_sha256") or ""),
+        "readiness_evidence_sha256": str(readiness.get("evidence_sha256") or ""),
+        "test_finalization_sha256": file_sha256(finalization) if finalization.is_file() else "",
     }
 
 
 def _validate_snapshot(expected: object, actual: dict) -> None:
     if not isinstance(expected, dict):
         raise ReviewTransactionError("review request input_snapshot must be a mapping")
-    changed = [key for key, value in actual.items() if expected.get(key) != value]
+    protocol = int(expected.get("snapshot_protocol") or 1)
+    keys = V2_SNAPSHOT_KEYS if protocol == 2 else LEGACY_SNAPSHOT_KEYS
+    missing = [key for key in keys if not str(expected.get(key) or "").strip()]
+    if missing:
+        raise ReviewTransactionError(
+            "review request input_snapshot is incomplete: " + ", ".join(missing)
+        )
+    changed = [key for key in keys if expected.get(key) != actual.get(key)]
     if changed:
         raise ReviewTransactionError(
             "review request is stale; changed inputs: " + ", ".join(changed)
@@ -310,7 +358,7 @@ def record_review(
         round_data["remediation_route"] = remediation_route
         data["remediation"] = {
             "route": remediation_route,
-            "within_approved_scope": True,
+            "within_approved_scope": remediation_route == "implementation",
         }
         data["status"] = (
             "implementing"
