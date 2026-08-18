@@ -22,6 +22,7 @@ from evidence_projection import (
     render_evidence,
 )
 from knowledge_gate import validate_project_knowledge_for_change
+from prepare_candidate import PrepareCandidateError, prepare_candidate
 from project_context import ProjectContext, resolve_project_context
 from readiness import (
     ReadinessError,
@@ -306,11 +307,7 @@ def command_status(context: ProjectContext, change: Path) -> None:
 
 
 def _render_if_v62(context: ProjectContext, change_value: str | Path) -> None:
-    try:
-        render_evidence(context, change_value)
-    except EvidenceProjectionError:
-        # Projection is rebuildable and must never roll back authoritative state.
-        raise
+    render_evidence(context, change_value)
 
 
 def _run_v62_command(argv: list[str]) -> bool:
@@ -319,6 +316,7 @@ def _run_v62_command(argv: list[str]) -> bool:
         "freeze-readiness",
         "record-readiness",
         "finalize-readiness",
+        "prepare-candidate",
         "record-verification",
         "render",
         "advance",
@@ -345,6 +343,13 @@ def _run_v62_command(argv: list[str]) -> bool:
 
     finalize = subparsers.add_parser("finalize-readiness")
     finalize.add_argument("change")
+
+    prepare = subparsers.add_parser("prepare-candidate")
+    prepare.add_argument("change")
+    prepare.add_argument("--retain", action="append", default=[])
+    prepare.add_argument("--preexisting", action="append", default=[])
+    prepare.add_argument("--reviewer", choices=("maintainer", "deep"), default="maintainer")
+    prepare.add_argument("--elevated-authorization-ref")
 
     verify = subparsers.add_parser("record-verification")
     verify.add_argument("change")
@@ -403,6 +408,18 @@ def _run_v62_command(argv: list[str]) -> bool:
             result = finalize_readiness(context, args.change)
             _render_if_v62(context, args.change)
             print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif args.command == "prepare-candidate":
+            role = "deep_reviewer" if args.reviewer == "deep" else "maintainer_reviewer"
+            result = prepare_candidate(
+                context,
+                args.change,
+                retained=args.retain,
+                preexisting=args.preexisting,
+                role=role,
+                elevated_authorization_ref=args.elevated_authorization_ref,
+            )
+            _render_if_v62(context, args.change)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         elif args.command == "record-verification":
             entry = record_verification(
                 context,
@@ -447,6 +464,7 @@ def _run_v62_command(argv: list[str]) -> bool:
         ReadinessError,
         ChangeLifecycleError,
         AtomicReviewError,
+        PrepareCandidateError,
         EvidenceProjectionError,
         ValueError,
     ) as error:
