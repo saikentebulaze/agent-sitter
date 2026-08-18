@@ -31,13 +31,27 @@ def _run_git(
         capture_output=True,
     )
     if result.returncode and not allow_failure:
-        stderr = result.stderr if not binary else result.stderr.decode("utf-8", errors="replace")
+        stderr = (
+            result.stderr
+            if not binary
+            else result.stderr.decode("utf-8", errors="replace")
+        )
         raise ProductionSnapshotError(stderr.strip() or "git command failed")
     return result
 
 
+def _normalized_relative(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    # Remove only explicit current-directory prefixes. Do not use lstrip("./"):
+    # that would turn hidden directories such as `.agent-work/` into
+    # `agent-work/` and accidentally classify Harness evidence as production.
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
 def _excluded(path: str) -> bool:
-    normalized = path.replace("\\", "/").lstrip("./")
+    normalized = _normalized_relative(path)
     return any(normalized.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
 
 
@@ -97,7 +111,9 @@ def production_snapshot_sha256(project_root: Path) -> str:
             continue
         digest.update(b"untracked\0")
         digest.update(
-            relative.replace("\\", "/").encode("utf-8", errors="surrogateescape")
+            relative.replace("\\", "/").encode(
+                "utf-8", errors="surrogateescape"
+            )
         )
         digest.update(b"\0")
         digest.update(path.read_bytes())
