@@ -43,11 +43,11 @@ LOW work does not use subagents for ceremony. MEDIUM exploration is optional whe
 
 ### Exploration offload economics
 
-Use the expensive parent for synthesis, decisions, edits and verification—not broad retrieval. After at most one or two obvious anchor reads, delegate early when ownership remains unknown, the chain crosses modules/lifecycle stages, or the next parent step would be broad Grep/Read. For HIGH/CRITICAL, satisfy independent exploration early once the question and bounded starting scope are stable.
+Use the expensive parent for synthesis, decisions, edits and verification—not broad retrieval. After at most one or two obvious anchor reads, delegate early when ownership remains unknown, the chain crosses modules/lifecycle stages, or the next parent step would be broad Grep/Read. For HIGH/CRITICAL, satisfy required independent exploration **early** once the question and bounded starting scope are stable.
 
-Choose the cheapest matching role: `source_locator` for exact symbols/callers/tests, `context_scout` for cross-module state/data flow, `test_scout` for test evidence, `framework_scout` only for real framework/ownership semantics. **Default to one Scout, not fan-out**; add another only for `NEED_CONTEXT`, an independent second search line, or evidence conflict. Do not repeat the Scout's broad search in the parent.
+Choose the cheapest matching role: `source_locator` for exact symbols/callers/tests, `context_scout` for cross-module state/data flow, `test_scout` for test evidence, `framework_scout` only for real framework/ownership semantics. **Default to one Scout, not fan-out**; add another only for `NEED_CONTEXT`, an independent second search line, or evidence conflict. After a Scout completes, do not repeat its broad search in the parent.
 
-Task-level authorization remains explicit. Same-tier/cheaper read-only offload may be authorized by the parent when policy allows; stronger-than-parent models still need elevated authorization. Use `delegate_once.py` for request -> Provider runtime -> attestation -> record. A result meant to satisfy a governed Scout/Review gate must be launched through Sitter from the beginning; casually spawned native output is advisory only.
+Task-level authorization remains explicit. When policy allows, the parent may authorize a same-tier or cheaper read-only Scout with `--decision optional|required`; stronger-than-parent models still need elevated authorization. Use `delegate_once.py` for request -> Provider runtime -> attestation -> record. A result meant to satisfy a governed Scout/Review gate must be launched through Sitter from the beginning; casually spawned native output is advisory only.
 
 Read `references/subagent-model-policy.md` / `reasoning-budget-policy.md` only when delegation/model budgeting is active.
 
@@ -87,7 +87,7 @@ Production/test edits stale that evidence; Harness lifecycle/Markdown writes do 
 python "$Runtime\finalize_tests.py" <change-id> --project $ProjectRoot
 ```
 
-Then run the independent maintainer review for Architecture, Scope and Numerical Evidence, including whether representative evidence really exercises the target business chain. Deep review remains exceptional escalation.
+Then run the independent maintainer review for Architecture, Scope and Numerical Evidence, including whether representative evidence really exercises the target business chain. V6.2 normally uses `harness.py review <change-id> --run`; Deep review remains exceptional escalation.
 
 A review BLOCK with remediation `implementation` is repaired inside already approved semantics without user interruption. `awaiting-production-design` means new scope/semantics are required and must reach the human checkpoint. Read `references/testing-policy.md`, `review-policy.md`, and `human-in-loop-policy.md` only in these phases.
 
