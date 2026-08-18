@@ -9,6 +9,7 @@ from typing import Callable
 import yaml
 
 from decision_authority import authority_projection
+from production_snapshot import production_review_diff, production_snapshot_sha256
 from provider_role_runner import (
     ProviderRoleRunnerError,
     RoleRunResult,
@@ -53,6 +54,10 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def _preflight(change: Path, data: dict) -> None:
     if data.get("candidate_readiness_protocol") != 1:
         raise AtomicReviewError("review --run is only available for activated V6.2 Changes")
@@ -82,14 +87,14 @@ def _review_message(context: ProjectContext, change: Path, packet_ref: str) -> s
     rel = project_relative(context, change)
     return f"""Perform the frozen Sitter Candidate Readiness Review described by {packet_ref}.
 
-Read only what is needed from these frozen inputs under {rel}:
+Read only what is needed from the frozen request and these inputs under {rel}:
 - proposal.md
 - design.md
 - tasks.md
 - verification.md
 - change.yaml
 - test-finalization.yaml
-- the current production/test diff
+- `inputs.production_diff` from the request; this is the Harness-frozen readable production/test diff
 
 Judge Architecture, Scope, and Numerical Evidence against the approved Design, Change Budget, authoritative human decisions, and Readiness Contract. Check that representative evidence actually exercises the target business path. Do not write or modify project files.
 
@@ -157,6 +162,22 @@ def _build_request(
     if missing:
         raise AtomicReviewError("review snapshot is incomplete: " + ", ".join(missing))
 
+    # Freeze a readable diff for Providers such as Claude whose governed child
+    # deliberately has no Bash tool. Creating the artifact under `changes/`
+    # must not affect the Production Snapshot; verify that invariant here.
+    production_before = str(input_snapshot["production_sha256"])
+    diff_text = production_review_diff(context.project_root)
+    diff_path = change / "reviews" / f"round-{round_number}.input.diff"
+    atomic_write_text(diff_path, diff_text)
+    production_after = production_snapshot_sha256(context.project_root)
+    if production_after != production_before:
+        diff_path.unlink(missing_ok=True)
+        raise AtomicReviewError(
+            "production/test state changed while freezing the reviewer diff"
+        )
+    diff_ref = project_relative(context, diff_path)
+    diff_sha256 = _text_sha256(diff_text)
+
     try:
         authority = authority_projection(data)
     except ValueError as error:
@@ -180,6 +201,11 @@ def _build_request(
         "elevated_authorization_ref": elevated_authorization_ref,
         "input_snapshot": input_snapshot,
         "decision_authority": authority,
+        "production_diff": {
+            "ref": diff_ref,
+            "sha256": diff_sha256,
+            "production_sha256": production_before,
+        },
         "inputs": {
             name.removesuffix(".md").replace("-", "_"): project_relative(
                 context, change / name
@@ -187,6 +213,7 @@ def _build_request(
             for name in ("proposal.md", "design.md", "tasks.md", "verification.md")
         },
     }
+    packet["inputs"]["production_diff"] = diff_ref
     request_path = change / "review-request.yaml"
     packet_ref = project_relative(context, request_path)
     packet["instructions"] = _review_message(context, change, packet_ref)
