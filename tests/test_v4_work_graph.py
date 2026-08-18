@@ -426,6 +426,10 @@ class WorkGraphLifecycleTests(unittest.TestCase):
             change_root = create_change_from_investigation(project)
             change_path = change_root / "change.yaml"
             change = yaml.safe_load(change_path.read_text(encoding="utf-8"))
+            # This regression intentionally exercises the legacy Review Protocol 1
+            # round/history machinery. Current V6.2 review/candidate behavior is
+            # covered by dedicated atomic-review and Candidate lifecycle tests.
+            change["candidate_readiness_protocol"] = None
             change["review_history"] = [{
                 "round": 1,
                 "status": "warn",
