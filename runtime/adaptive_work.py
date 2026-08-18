@@ -7,6 +7,7 @@ import governed_work as _base
 from core.work_risk import RiskLevel, RiskVector, raise_to_floor
 from governed_validation import validate_governed_work_graph
 from project_context import ProjectContext
+from review_transaction import atomic_write_yaml
 from risk_transaction import current_work_risk, reassess_task_risk
 from work_graph import (
     investigation_markdown_path,
@@ -72,6 +73,11 @@ def pivot_to_change(
             rationale=rationale,
             supersede_change=supersede_change,
         )
+        change_path = root / "change.yaml"
+        change = load_yaml(change_path)
+        change["candidate_readiness_protocol"] = 1
+        atomic_write_yaml(change_path, change)
+
         task = load_yaml(task_path)
         risk = current_work_risk(task)
         reassess_task_risk(
