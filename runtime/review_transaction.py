@@ -203,7 +203,13 @@ def _validate_reviewer(packet: dict) -> dict:
             "reviewer summary differs from the frozen Provider role profile"
         )
     runtime_execution = packet.get("runtime_execution") or {}
-    for key in ("session_ref", "attestation_ref", "evidence_ref", "execution_method"):
+    for key in (
+        "session_ref",
+        "attestation_ref",
+        "evidence_ref",
+        "execution_method",
+        "execution_request_sha256",
+    ):
         if not str(runtime_execution.get(key) or "").strip():
             raise ReviewTransactionError(
                 f"review protocol 2 runtime_execution.{key} is required before record"
@@ -385,6 +391,9 @@ def record_review(
                 "session_ref": runtime_execution["session_ref"],
                 "attestation_ref": runtime_execution["attestation_ref"],
                 "runtime_evidence_ref": runtime_execution["evidence_ref"],
+                "execution_request_sha256": runtime_execution[
+                    "execution_request_sha256"
+                ],
             }
         )
     if packet.get("elevated_authorization_ref"):
@@ -409,7 +418,10 @@ def record_review(
             if remediation_route == "implementation"
             else "designed"
         )
-        if remediation_route == "implementation" and data.get("candidate_readiness_protocol") == 1:
+        if (
+            remediation_route == "implementation"
+            and data.get("candidate_readiness_protocol") == 1
+        ):
             readiness = data.setdefault("readiness", {})
             readiness["status"] = "stale"
             completion = data.setdefault("completion", {})
@@ -429,8 +441,7 @@ def record_review(
         atomic_write_text(output, artifact_text)
         output_written = True
         atomic_write_yaml(change_yaml, data)
-        if protocol == 1:
-            _run_validator(context, change)
+        _run_validator(context, change)
         _archive_request(change, packet)
     except Exception:
         atomic_write_text(change_yaml, original_change)
