@@ -284,6 +284,7 @@ class V62CandidateReadinessTests(unittest.TestCase):
             project, context = make_project(Path(directory))
             change = project / "changes" / "active" / "chg"
             write_yaml(change / "change.yaml", base_change("chg"))
+            write_review_inputs(change)
             freeze_then_implement(context, change)
 
             record_readiness(
@@ -317,6 +318,7 @@ class V62CandidateReadinessTests(unittest.TestCase):
             project, context = make_project(Path(directory))
             change = project / "changes" / "active" / "chg"
             write_yaml(change / "change.yaml", base_change("chg"))
+            write_review_inputs(change)
             freeze_then_implement(context, change)
             record_readiness(
                 context,
