@@ -25,6 +25,7 @@ from readiness import (
     record_readiness,
     validate_readiness_contract,
 )
+from review_runner import AtomicReviewError, run_atomic_review
 from review_transaction import current_snapshot as _review_current_snapshot
 from review_transaction import record_review as _record_review
 
@@ -63,7 +64,7 @@ def command_review_packet(
     reviewer_name: str,
     elevated_authorization_ref: str | None,
 ) -> None:
-    """Create review input that freezes assurance and explicit user decisions."""
+    """Create legacy/manual review input while adding V6 authority provenance."""
 
     data = _impl.load_yaml(change / "change.yaml")
     v62 = data.get("candidate_readiness_protocol") == 1
@@ -303,6 +304,7 @@ def command_status(context: ProjectContext, change: Path) -> None:
 
 
 def _run_v62_command(argv: list[str]) -> bool:
+    atomic_review = "review" in argv and "--run" in argv
     commands = {
         "freeze-readiness",
         "record-readiness",
@@ -310,7 +312,7 @@ def _run_v62_command(argv: list[str]) -> bool:
         "advance",
         "user-review",
     }
-    command = next((value for value in argv if value in commands), None)
+    command = "review" if atomic_review else next((value for value in argv if value in commands), None)
     if command is None:
         return False
 
@@ -344,6 +346,12 @@ def _run_v62_command(argv: list[str]) -> bool:
     )
     user.add_argument("--evidence", required=True)
 
+    review = subparsers.add_parser("review")
+    review.add_argument("change")
+    review.add_argument("--run", action="store_true", required=True)
+    review.add_argument("--reviewer", choices=("maintainer", "deep"), default="maintainer")
+    review.add_argument("--elevated-authorization-ref")
+
     args = parser.parse_args(argv)
     context = resolve_project_context(args.project)
     try:
@@ -368,7 +376,21 @@ def _run_v62_command(argv: list[str]) -> bool:
             print(
                 f"user review recorded: {record_user_review(context, args.change, decision=args.decision, evidence=args.evidence)}"
             )
-    except (ReadinessError, ChangeLifecycleError, ValueError) as error:
+        elif args.command == "review":
+            role = "deep_reviewer" if args.reviewer == "deep" else "maintainer_reviewer"
+            print(
+                json.dumps(
+                    run_atomic_review(
+                        context,
+                        args.change,
+                        role=role,
+                        elevated_authorization_ref=args.elevated_authorization_ref,
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+    except (ReadinessError, ChangeLifecycleError, AtomicReviewError, ValueError) as error:
         raise SystemExit(str(error)) from error
     return True
 
