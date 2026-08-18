@@ -16,6 +16,11 @@ from change_lifecycle import (
     record_user_review,
 )
 from decision_authority import authority_projection, human_decision_digest
+from evidence_projection import (
+    EvidenceProjectionError,
+    record_verification,
+    render_evidence,
+)
 from knowledge_gate import validate_project_knowledge_for_change
 from project_context import ProjectContext, resolve_project_context
 from readiness import (
@@ -271,13 +276,10 @@ def command_validate(
     change: Path,
     strict_symbols: bool,
 ) -> None:
+    _impl.run_change_validator(context, change)
     data = _impl.load_yaml(change / "change.yaml")
-    if data.get("candidate_readiness_protocol") == 1 and data.get("status") == "candidate-review":
+    if data.get("candidate_readiness_protocol") == 1:
         _validate_v62_gate(change, data)
-    else:
-        _impl.run_change_validator(context, change)
-        if data.get("candidate_readiness_protocol") == 1:
-            _validate_v62_gate(change, data)
 
     link_errors = _impl.validate_markdown_links(change, context.project_root)
     if link_errors:
@@ -303,12 +305,22 @@ def command_status(context: ProjectContext, change: Path) -> None:
     _base_command_status(context, change)
 
 
+def _render_if_v62(context: ProjectContext, change_value: str | Path) -> None:
+    try:
+        render_evidence(context, change_value)
+    except EvidenceProjectionError:
+        # Projection is rebuildable and must never roll back authoritative state.
+        raise
+
+
 def _run_v62_command(argv: list[str]) -> bool:
     atomic_review = "review" in argv and "--run" in argv
     commands = {
         "freeze-readiness",
         "record-readiness",
         "finalize-readiness",
+        "record-verification",
+        "render",
         "advance",
         "user-review",
     }
@@ -334,6 +346,20 @@ def _run_v62_command(argv: list[str]) -> bool:
     finalize = subparsers.add_parser("finalize-readiness")
     finalize.add_argument("change")
 
+    verify = subparsers.add_parser("record-verification")
+    verify.add_argument("change")
+    verify.add_argument("--id", required=True)
+    verify.add_argument("--kind", required=True)
+    verify.add_argument("--result", choices=("pass", "partial", "fail"), required=True)
+    verify.add_argument("--command-or-entry", required=True)
+    verify.add_argument("--evidence", required=True)
+    verify.add_argument("--observed")
+    verify.add_argument("--proves")
+    verify.add_argument("--does-not-prove")
+
+    render = subparsers.add_parser("render")
+    render.add_argument("change")
+
     advance = subparsers.add_parser("advance")
     advance.add_argument("change")
 
@@ -356,7 +382,11 @@ def _run_v62_command(argv: list[str]) -> bool:
     context = resolve_project_context(args.project)
     try:
         if args.command == "freeze-readiness":
-            print(f"readiness contract frozen: {freeze_readiness_contract(context, args.change)}")
+            print(
+                f"readiness contract frozen: "
+                f"{freeze_readiness_contract(context, args.change)}"
+            )
+            _render_if_v62(context, args.change)
         elif args.command == "record-readiness":
             record_readiness(
                 context,
@@ -367,30 +397,59 @@ def _run_v62_command(argv: list[str]) -> bool:
                 evidence=args.evidence,
                 observed=args.observed,
             )
+            _render_if_v62(context, args.change)
             print(f"recorded readiness: {args.criterion}")
         elif args.command == "finalize-readiness":
-            print(json.dumps(finalize_readiness(context, args.change), ensure_ascii=False, indent=2))
-        elif args.command == "advance":
-            print(f"advanced: {advance_change(context, args.change)}")
-        elif args.command == "user-review":
-            print(
-                f"user review recorded: {record_user_review(context, args.change, decision=args.decision, evidence=args.evidence)}"
+            result = finalize_readiness(context, args.change)
+            _render_if_v62(context, args.change)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif args.command == "record-verification":
+            entry = record_verification(
+                context,
+                args.change,
+                result_id=args.id,
+                kind=args.kind,
+                result=args.result,
+                command_or_entry=args.command_or_entry,
+                evidence=args.evidence,
+                observed=args.observed,
+                proves=args.proves,
+                does_not_prove=args.does_not_prove,
             )
+            print(json.dumps(entry, ensure_ascii=False, indent=2))
+        elif args.command == "render":
+            render_evidence(context, args.change)
+            print(f"rendered evidence: {args.change}")
+        elif args.command == "advance":
+            state = advance_change(context, args.change)
+            _render_if_v62(context, args.change)
+            print(f"advanced: {state}")
+        elif args.command == "user-review":
+            state = record_user_review(
+                context,
+                args.change,
+                decision=args.decision,
+                evidence=args.evidence,
+            )
+            _render_if_v62(context, args.change)
+            print(f"user review recorded: {state}")
         elif args.command == "review":
             role = "deep_reviewer" if args.reviewer == "deep" else "maintainer_reviewer"
-            print(
-                json.dumps(
-                    run_atomic_review(
-                        context,
-                        args.change,
-                        role=role,
-                        elevated_authorization_ref=args.elevated_authorization_ref,
-                    ),
-                    ensure_ascii=False,
-                    indent=2,
-                )
+            result = run_atomic_review(
+                context,
+                args.change,
+                role=role,
+                elevated_authorization_ref=args.elevated_authorization_ref,
             )
-    except (ReadinessError, ChangeLifecycleError, AtomicReviewError, ValueError) as error:
+            _render_if_v62(context, args.change)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    except (
+        ReadinessError,
+        ChangeLifecycleError,
+        AtomicReviewError,
+        EvidenceProjectionError,
+        ValueError,
+    ) as error:
         raise SystemExit(str(error)) from error
     return True
 
