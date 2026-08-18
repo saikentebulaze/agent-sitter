@@ -2,20 +2,35 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 from pathlib import Path
 
 import _harness_impl as _impl
 from _harness_impl import *  # noqa: F401,F403
+from change_lifecycle import (
+    ChangeLifecycleError,
+    advance_change,
+    build_change_dashboard,
+    record_user_review,
+)
 from decision_authority import authority_projection, human_decision_digest
 from knowledge_gate import validate_project_knowledge_for_change
-from project_context import ProjectContext
+from project_context import ProjectContext, resolve_project_context
+from readiness import (
+    ReadinessError,
+    finalize_readiness,
+    record_readiness,
+    validate_readiness_contract,
+)
 from review_transaction import record_review as _record_review
 
 
 _base_command_review_packet = _impl.command_review_packet
 _base_command_render_knowledge = _impl.command_render_knowledge
 _base_command_promote_knowledge = _impl.command_promote_knowledge
+_base_command_status = _impl.command_status
 
 
 def _assurance_snapshot(change: Path) -> dict[str, str]:
@@ -47,6 +62,23 @@ def command_review_packet(
     elevated_authorization_ref: str | None,
 ) -> None:
     """Create review input that freezes assurance and explicit user decisions."""
+
+    data = _impl.load_yaml(change / "change.yaml")
+    if data.get("candidate_readiness_protocol") == 1:
+        validate_readiness_contract(data)
+        readiness = data.get("readiness") or {}
+        if readiness.get("status") != "pass":
+            raise _impl.ReviewTransactionError(
+                "Candidate Readiness must pass before independent readiness review"
+            )
+        methodology = data.get("methodology") or {}
+        if methodology.get("test_cleanup_protocol") == 1 and (
+            methodology.get("test_cleanup_complete") is not True
+            or not str(methodology.get("test_cleanup_evidence") or "").strip()
+        ):
+            raise _impl.ReviewTransactionError(
+                "test finalization must complete before independent readiness review"
+            )
 
     _base_command_review_packet(
         context,
@@ -174,12 +206,33 @@ def command_promote_knowledge(
     _base_command_promote_knowledge(context, change, reviewed_by, evidence)
 
 
+def _validate_v62_gate(change: Path, data: dict) -> None:
+    validate_readiness_contract(data)
+    status = str(data.get("status") or "")
+    completion = data.get("completion") or {}
+    user_review = data.get("user_review") or {}
+    if status == "candidate-review":
+        if completion.get("implementation_complete") is not True:
+            raise ReadinessError("candidate-review requires implementation_complete")
+        if completion.get("ready_for_user_review") is not True:
+            raise ReadinessError("candidate-review requires ready_for_user_review")
+    if status in {"verifying", "syncing", "ready-to-archive", "archived"}:
+        if user_review.get("status") not in {"approved", "not-required"}:
+            raise ReadinessError("user acceptance is required before final verification")
+
+
 def command_validate(
     context: ProjectContext,
     change: Path,
     strict_symbols: bool,
 ) -> None:
-    _impl.run_change_validator(context, change)
+    data = _impl.load_yaml(change / "change.yaml")
+    if data.get("candidate_readiness_protocol") == 1 and data.get("status") == "candidate-review":
+        _validate_v62_gate(change, data)
+    else:
+        _impl.run_change_validator(context, change)
+        if data.get("candidate_readiness_protocol") == 1:
+            _validate_v62_gate(change, data)
 
     link_errors = _impl.validate_markdown_links(change, context.project_root)
     if link_errors:
@@ -197,12 +250,82 @@ def command_validate(
     print("change_consistency: valid")
 
 
+def command_status(context: ProjectContext, change: Path) -> None:
+    data = _impl.load_yaml(change / "change.yaml")
+    if data.get("candidate_readiness_protocol") == 1:
+        print(json.dumps(build_change_dashboard(context, change), ensure_ascii=False, indent=2))
+        return
+    _base_command_status(context, change)
+
+
+def _run_v62_command(argv: list[str]) -> bool:
+    commands = {"record-readiness", "finalize-readiness", "advance", "user-review"}
+    command = next((value for value in argv if value in commands), None)
+    if command is None:
+        return False
+
+    parser = argparse.ArgumentParser(description="Sitter V6.2 Candidate Readiness commands")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    record = subparsers.add_parser("record-readiness")
+    record.add_argument("change")
+    record.add_argument("--criterion", required=True)
+    record.add_argument("--result", choices=("pass", "fail"), required=True)
+    record.add_argument("--command-or-entry", required=True)
+    record.add_argument("--evidence", required=True)
+    record.add_argument("--observed")
+
+    finalize = subparsers.add_parser("finalize-readiness")
+    finalize.add_argument("change")
+
+    advance = subparsers.add_parser("advance")
+    advance.add_argument("change")
+
+    user = subparsers.add_parser("user-review")
+    user.add_argument("change")
+    user.add_argument(
+        "--decision",
+        choices=("approved", "changes-requested", "not-required"),
+        required=True,
+    )
+    user.add_argument("--evidence", required=True)
+
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        if args.command == "record-readiness":
+            record_readiness(
+                context,
+                args.change,
+                criterion_id=args.criterion,
+                result=args.result,
+                command_or_entry=args.command_or_entry,
+                evidence=args.evidence,
+                observed=args.observed,
+            )
+            print(f"recorded readiness: {args.criterion}")
+        elif args.command == "finalize-readiness":
+            print(json.dumps(finalize_readiness(context, args.change), ensure_ascii=False, indent=2))
+        elif args.command == "advance":
+            print(f"advanced: {advance_change(context, args.change)}")
+        elif args.command == "user-review":
+            print(
+                f"user review recorded: {record_user_review(context, args.change, decision=args.decision, evidence=args.evidence)}"
+            )
+    except (ReadinessError, ChangeLifecycleError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    return True
+
+
 _impl.command_validate = command_validate
 _impl.command_review_packet = command_review_packet
 _impl.record_review = record_review
 _impl.command_render_knowledge = command_render_knowledge
 _impl.command_promote_knowledge = command_promote_knowledge
+_impl.command_status = command_status
 
 
 if __name__ == "__main__":
-    _impl.main()
+    if not _run_v62_command(sys.argv[1:]):
+        _impl.main()
