@@ -2,10 +2,11 @@ schema_version: 4
 id: replace-with-change-id
 task_id: replace-with-task-id
 title: replace-with-title
-status: proposed # proposed | designed | approved | implementing | verifying | syncing | ready-to-archive | archived
+status: proposed # proposed | designed | approved | implementing | candidate-review | verifying | syncing | ready-to-archive | archived
 execution_state: active # active | paused | abandoned
 
 decision_authority_protocol: 1
+candidate_readiness_protocol: 1
 
 hold:
   reason:
@@ -72,6 +73,22 @@ methodology:
   test_cleanup_evidence:
   retained_test_rationale: []
 
+readiness:
+  assurance_class: standard # standard | behavioral | numerical
+  status: pending # pending | pass | fail | stale
+  criteria:
+    - id: focused-regression
+      kind: focused-test
+      required: true
+      description: directly affected behavior has focused regression coverage
+  latest_results: []
+  contract_sha256:
+  evidence_sha256:
+  production_snapshot:
+    sha256:
+    captured_at:
+  achieved_at:
+
 completion:
   implementation_complete: false
   ready_for_user_review: false
@@ -79,6 +96,7 @@ completion:
 user_review:
   status: pending # pending | approved | changes-requested | not-required
   evidence:
+  reviewed_at:
 
 review:
   status: pending # pending | pass | warn | block
