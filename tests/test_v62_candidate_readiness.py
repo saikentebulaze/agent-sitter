@@ -95,10 +95,11 @@ def base_change(change_id: str, *, assurance: str = "standard") -> dict:
         },
         "user_review": {"status": "pending", "evidence": None},
         "review": {
-            "status": "pass",
-            "architecture": "pass",
-            "scope": "pass",
-            "numerical_evidence": "pass",
+            "status": "pending",
+            "architecture": "pending",
+            "scope": "pending",
+            "numerical_evidence": "pending",
+            "execution": {},
         },
         "human_in_loop": {
             "decision_assessment": {
@@ -114,6 +115,33 @@ def freeze_then_implement(context: ProjectContext, change: Path) -> None:
     freeze_readiness_contract(context, change)
     data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
     data["status"] = "implementing"
+    write_yaml(change / "change.yaml", data)
+
+
+def mark_current_review_pass(context: ProjectContext, change: Path) -> None:
+    """Materialize the minimal snapshot-2 review needed by lifecycle unit tests.
+
+    Atomic Review itself is covered separately in test_v62_atomic_review. These
+    tests exercise only the Candidate human-stop lifecycle and therefore use a
+    deterministic recorded-review fixture rather than running a Provider.
+    """
+
+    snapshot = current_snapshot(context, change)
+    data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
+    data["review"] = {
+        "status": "pass",
+        "architecture": "pass",
+        "scope": "pass",
+        "numerical_evidence": "pass",
+        "execution": {
+            "input_snapshot": {
+                "snapshot_protocol": 2,
+                "production_sha256": snapshot["production_sha256"],
+                "readiness_contract_sha256": snapshot["readiness_contract_sha256"],
+                "readiness_evidence_sha256": snapshot["readiness_evidence_sha256"],
+            }
+        },
+    }
     write_yaml(change / "change.yaml", data)
 
 
@@ -267,6 +295,7 @@ class V62CandidateReadinessTests(unittest.TestCase):
                 evidence="test-log.txt",
             )
             finalize_readiness(context, "chg")
+            mark_current_review_pass(context, change)
             self.assertEqual(advance_change(context, "chg"), "candidate-review")
 
             dashboard = build_change_dashboard(context, "chg")
@@ -298,6 +327,7 @@ class V62CandidateReadinessTests(unittest.TestCase):
                 evidence="test-log.txt",
             )
             finalize_readiness(context, "chg")
+            mark_current_review_pass(context, change)
             advance_change(context, "chg")
             state = record_user_review(
                 context,
