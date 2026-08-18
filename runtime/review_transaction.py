@@ -121,12 +121,10 @@ def current_snapshot(context: ProjectContext, change: Path) -> dict:
     readiness = data.get("readiness") or {}
     finalization = change / "test-finalization.yaml"
     return {
-        # Legacy protocol-1 fields remain available for old review packets.
         "design_sha256": file_sha256(change / "design.md"),
         "tasks_sha256": file_sha256(change / "tasks.md"),
         "diff_sha256": git_diff_sha256(context.project_root),
         "verification_sha256": file_sha256(change / "verification.md"),
-        # V6.2 protocol-2 fields freeze semantic production/readiness inputs.
         "production_sha256": production_snapshot_sha256(context.project_root),
         "change_budget_sha256": _mapping_sha256(data.get("change_budget") or {}),
         "human_decisions_sha256": human_decision_digest(data),
@@ -171,12 +169,45 @@ def _validate_reviewer(packet: dict) -> dict:
         value = reviewer.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ReviewTransactionError(f"review request reviewer.{key} is required")
-    if packet.get("method") != "native-subagent":
-        raise ReviewTransactionError("review request method must be native-subagent")
-    if reviewer["agent"] == "deep_reviewer" and not packet.get(
-        "elevated_authorization_ref"
+
+    protocol = int(packet.get("review_protocol") or 1)
+    method = str(packet.get("method") or "")
+    if protocol == 1:
+        if method != "native-subagent":
+            raise ReviewTransactionError("review request method must be native-subagent")
+        if reviewer["agent"] == "deep_reviewer" and not packet.get(
+            "elevated_authorization_ref"
+        ):
+            raise ReviewTransactionError("deep review request lacks elevated authorization evidence")
+        return reviewer
+    if protocol != 2:
+        raise ReviewTransactionError(f"unsupported review_protocol: {protocol}")
+    if method != "provider-managed-readonly":
+        raise ReviewTransactionError(
+            "review protocol 2 method must be provider-managed-readonly"
+        )
+    runtime = packet.get("runtime") or {}
+    provider = str(runtime.get("provider") or "")
+    if provider not in {"codex", "claude"}:
+        raise ReviewTransactionError("review protocol 2 requires codex or claude Provider")
+    requested = packet.get("requested_profile") or {}
+    expected_agent = str(requested.get("role_id") or requested.get("agent") or "")
+    expected_model = str(requested.get("model_selector") or requested.get("model") or "")
+    expected_tier = str(requested.get("model_grade") or requested.get("tier") or "")
+    if (
+        reviewer.get("agent") != expected_agent
+        or reviewer.get("model") != expected_model
+        or reviewer.get("tier") != expected_tier
     ):
-        raise ReviewTransactionError("deep review request lacks elevated authorization evidence")
+        raise ReviewTransactionError(
+            "reviewer summary differs from the frozen Provider role profile"
+        )
+    runtime_execution = packet.get("runtime_execution") or {}
+    for key in ("session_ref", "attestation_ref", "evidence_ref", "execution_method"):
+        if not str(runtime_execution.get(key) or "").strip():
+            raise ReviewTransactionError(
+                f"review protocol 2 runtime_execution.{key} is required before record"
+            )
     return reviewer
 
 
@@ -333,7 +364,9 @@ def record_review(
     if output.exists():
         raise ReviewTransactionError(f"review output already exists: {output}")
 
+    protocol = int(packet.get("review_protocol") or 1)
     execution = {
+        "review_protocol": protocol,
         "agent": reviewer["agent"],
         "model": reviewer["model"],
         "tier": reviewer["tier"],
@@ -343,6 +376,17 @@ def record_review(
         "round": round_number,
         "input_snapshot": packet["input_snapshot"],
     }
+    if protocol == 2:
+        runtime_execution = packet.get("runtime_execution") or {}
+        execution.update(
+            {
+                "provider": str((packet.get("runtime") or {}).get("provider") or ""),
+                "runtime_method": runtime_execution["execution_method"],
+                "session_ref": runtime_execution["session_ref"],
+                "attestation_ref": runtime_execution["attestation_ref"],
+                "runtime_evidence_ref": runtime_execution["evidence_ref"],
+            }
+        )
     if packet.get("elevated_authorization_ref"):
         execution["elevated_authorization_ref"] = packet["elevated_authorization_ref"]
 
@@ -365,6 +409,12 @@ def record_review(
             if remediation_route == "implementation"
             else "designed"
         )
+        if remediation_route == "implementation" and data.get("candidate_readiness_protocol") == 1:
+            readiness = data.setdefault("readiness", {})
+            readiness["status"] = "stale"
+            completion = data.setdefault("completion", {})
+            completion["implementation_complete"] = False
+            completion["ready_for_user_review"] = False
     else:
         data["remediation"] = {"route": None, "within_approved_scope": False}
 
@@ -379,7 +429,8 @@ def record_review(
         atomic_write_text(output, artifact_text)
         output_written = True
         atomic_write_yaml(change_yaml, data)
-        _run_validator(context, change)
+        if protocol == 1:
+            _run_validator(context, change)
         _archive_request(change, packet)
     except Exception:
         atomic_write_text(change_yaml, original_change)
