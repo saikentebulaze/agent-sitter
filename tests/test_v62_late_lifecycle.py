@@ -1,113 +1,52 @@
 from __future__ import annotations
 
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
-
-ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "runtime"
-if str(RUNTIME) not in sys.path:
-    sys.path.insert(0, str(RUNTIME))
-
-from change_lifecycle import ChangeLifecycleError, advance_change  # noqa: E402
-from production_snapshot import production_snapshot_sha256  # noqa: E402
-from project_context import ProjectContext  # noqa: E402
-
-
-def git(project: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-C", str(project), *args],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-
-
-def write_yaml(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
-
-
-def fixture(root: Path):
-    project = root / "project"
-    project.mkdir()
-    git(project, "init")
-    git(project, "config", "user.email", "tests@example.com")
-    git(project, "config", "user.name", "Sitter Tests")
-    (project / "src.cpp").write_text("// baseline\n", encoding="utf-8")
-    git(project, "add", ".")
-    git(project, "commit", "-m", "baseline")
-    context = ProjectContext(ROOT, project, ROOT / "adapters" / "default")
-    snapshot = production_snapshot_sha256(project)
-    contract = "b" * 64
-    evidence = "c" * 64
-    change = project / "changes/active/chg"
-    write_yaml(
-        change / "change.yaml",
-        {
-            "schema_version": 4,
-            "id": "chg",
-            "status": "verifying",
-            "candidate_readiness_protocol": 1,
-            "readiness": {
-                "assurance_class": "standard",
-                "status": "pass",
-                "criteria": [
-                    {
-                        "id": "focused",
-                        "kind": "focused-test",
-                        "required": True,
-                        "description": "focused behavior",
-                    }
-                ],
-                "latest_results": [],
-                "contract_sha256": contract,
-                "evidence_sha256": evidence,
-                "production_snapshot": {"sha256": snapshot},
-            },
-            "review": {
-                "status": "pass",
-                "execution": {
-                    "input_snapshot": {
-                        "snapshot_protocol": 2,
-                        "production_sha256": snapshot,
-                        "readiness_contract_sha256": contract,
-                        "readiness_evidence_sha256": evidence,
-                    }
-                },
-            },
-            "user_review": {
-                "status": "approved",
-                "evidence": "accepted",
-                "reviewed_at": "2026-08-18T00:00:00Z",
-            },
-            "verification": {"status": "pending", "latest_results": []},
-            "knowledge_sync": {"status": "deferred", "deferred_reason": "fixture"},
-            "archive": {
-                "experiment_cleanup_complete": True,
-                "temporary_production_files": [],
-                "blockers": [],
-            },
-        },
-    )
-    return change, context
+from change_lifecycle import (  # noqa: E402
+    ChangeLifecycleError,
+    advance_change,
+    record_user_review,
+)
+from review_runner import run_atomic_review  # noqa: E402
+from test_v62_atomic_review import (  # noqa: E402
+    fake_role_runner,
+    load_yaml,
+    make_project,
+    prepare_change,
+    write_yaml,
+)
 
 
 class LateLifecycleTests(unittest.TestCase):
     def test_final_verification_blocks_then_advances_to_archive_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            change, context = fixture(Path(directory))
-            with self.assertRaisesRegex(ChangeLifecycleError, "final verification"):
-                advance_change(context, "chg")
+            project, context = make_project(Path(directory))
+            change = prepare_change(project, context)
+            run_atomic_review(
+                context,
+                "chg-one",
+                role_runner=fake_role_runner(
+                    "  architecture: pass\n"
+                    "  scope: pass\n"
+                    "  numerical_evidence: pass\n"
+                    "  remediation_route: null\n"
+                ),
+            )
+            self.assertEqual(advance_change(context, "chg-one"), "candidate-review")
+            record_user_review(
+                context,
+                "chg-one",
+                decision="approved",
+                evidence="fixture human acceptance",
+            )
+            self.assertEqual(advance_change(context, "chg-one"), "verifying")
 
-            data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(ChangeLifecycleError, "final verification"):
+                advance_change(context, "chg-one")
+
+            data = load_yaml(change / "change.yaml")
             data["verification"] = {
                 "status": "pass",
                 "latest_results": [
@@ -122,11 +61,19 @@ class LateLifecycleTests(unittest.TestCase):
                 ],
             }
             write_yaml(change / "change.yaml", data)
+            self.assertEqual(advance_change(context, "chg-one"), "syncing")
 
-            self.assertEqual(advance_change(context, "chg"), "syncing")
-            self.assertEqual(advance_change(context, "chg"), "ready-to-archive")
+            data = load_yaml(change / "change.yaml")
+            data["knowledge_sync"]["status"] = "deferred"
+            data["knowledge_sync"]["deferred_reason"] = "fixture"
+            data["archive"]["experiment_cleanup_complete"] = True
+            data["archive"]["temporary_production_files"] = []
+            data["archive"]["blockers"] = []
+            write_yaml(change / "change.yaml", data)
+
+            self.assertEqual(advance_change(context, "chg-one"), "ready-to-archive")
             with self.assertRaisesRegex(ChangeLifecycleError, "archive transaction"):
-                advance_change(context, "chg")
+                advance_change(context, "chg-one")
 
 
 if __name__ == "__main__":
