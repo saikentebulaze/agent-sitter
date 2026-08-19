@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from project_context import resolve_project_context
+from reference_resolver import ReferenceResolutionError, resolve_task_ref
 
 
 FILES = [
@@ -38,7 +39,12 @@ def main() -> None:
         )
     try:
         context = resolve_project_context(args.project)
-    except ValueError as error:
+        if args.task_id:
+            # Review Protocol 2 is Provider-bound through the owning Task. Do
+            # not create a Change that claims V6.2 activation but has no real
+            # orchestrator binding to resolve later.
+            resolve_task_ref(context, args.task_id)
+    except (ValueError, ReferenceResolutionError) as error:
         raise SystemExit(str(error)) from error
 
     assets = context.adapter_root / "skills/change-governor/assets"
@@ -64,11 +70,12 @@ def main() -> None:
                 "task_id: replace-with-task-id",
                 f"task_id: {task_value}",
             )
-            text = text.replace(
-                "candidate_readiness_protocol:\n",
-                "candidate_readiness_protocol: 1\n",
-                1,
-            )
+            if args.task_id:
+                text = text.replace(
+                    "candidate_readiness_protocol:\n",
+                    "candidate_readiness_protocol: 1\n",
+                    1,
+                )
         (target / name).write_text(text, encoding="utf-8")
 
     print(target.relative_to(context.project_root))
