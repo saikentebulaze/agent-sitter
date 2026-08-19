@@ -10,13 +10,16 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "runtime"
-if str(RUNTIME) not in sys.path:
-    sys.path.insert(0, str(RUNTIME))
+TESTS = ROOT / "tests"
+for path in (RUNTIME, TESTS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from prepare_candidate import PrepareCandidateError, prepare_candidate  # noqa: E402
 from project_context import ProjectContext  # noqa: E402
 from provider_role_runner import RoleRunResult  # noqa: E402
 from readiness import freeze_readiness_contract, record_readiness  # noqa: E402
+from test_v62_atomic_review import _valid_codex_attestation  # noqa: E402
 
 
 def git(project: Path, *args: str) -> None:
@@ -137,13 +140,7 @@ def pass_runner(counter: list[int]):
                 "```\n"
             ),
             packet=packet,
-            attestation={
-                "schema_version": 2,
-                "execution": {
-                    "method": "app-server-isolated-agent",
-                    "session_ref": session,
-                },
-            },
+            attestation=_valid_codex_attestation(context, packet, session),
             evidence={"fixture": True},
             session_ref=session,
         )
