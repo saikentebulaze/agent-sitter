@@ -10,8 +10,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "runtime"
-if str(RUNTIME) not in sys.path:
-    sys.path.insert(0, str(RUNTIME))
+TESTS = ROOT / "tests"
+for path in (RUNTIME, TESTS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from change_lifecycle import (  # noqa: E402
     ChangeLifecycleError,
@@ -29,10 +31,16 @@ from readiness import (  # noqa: E402
     validate_readiness_contract,
 )
 from reference_resolver import resolve_change_ref, resolve_task_ref  # noqa: E402
+from review_runner import run_atomic_review  # noqa: E402
 from review_transaction import (  # noqa: E402
     ReviewTransactionError,
     _validate_snapshot,
     current_snapshot,
+)
+from test_v62_atomic_review import (  # noqa: E402
+    fake_role_runner,
+    make_project as make_atomic_project,
+    prepare_change as prepare_atomic_change,
 )
 
 
@@ -118,33 +126,6 @@ def freeze_then_implement(context: ProjectContext, change: Path) -> None:
     write_yaml(change / "change.yaml", data)
 
 
-def mark_current_review_pass(context: ProjectContext, change: Path) -> None:
-    """Materialize the minimal snapshot-2 review needed by lifecycle unit tests.
-
-    Atomic Review itself is covered separately in test_v62_atomic_review. These
-    tests exercise only the Candidate human-stop lifecycle and therefore use a
-    deterministic recorded-review fixture rather than running a Provider.
-    """
-
-    snapshot = current_snapshot(context, change)
-    data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
-    data["review"] = {
-        "status": "pass",
-        "architecture": "pass",
-        "scope": "pass",
-        "numerical_evidence": "pass",
-        "execution": {
-            "input_snapshot": {
-                "snapshot_protocol": 2,
-                "production_sha256": snapshot["production_sha256"],
-                "readiness_contract_sha256": snapshot["readiness_contract_sha256"],
-                "readiness_evidence_sha256": snapshot["readiness_evidence_sha256"],
-            }
-        },
-    }
-    write_yaml(change / "change.yaml", data)
-
-
 def write_review_inputs(change: Path) -> None:
     for name, text in (
         ("design.md", "# Design\n\nStable approved design.\n"),
@@ -155,6 +136,19 @@ def write_review_inputs(change: Path) -> None:
     write_yaml(
         change / "test-finalization.yaml",
         {"schema_version": 1, "change_id": change.name, "decisions": []},
+    )
+
+
+def pass_atomic_review(context: ProjectContext, change_id: str = "chg-one") -> None:
+    run_atomic_review(
+        context,
+        change_id,
+        role_runner=fake_role_runner(
+            "  architecture: pass\n"
+            "  scope: pass\n"
+            "  numerical_evidence: pass\n"
+            "  remediation_route: null\n"
+        ),
     )
 
 
@@ -281,59 +275,34 @@ class V62CandidateReadinessTests(unittest.TestCase):
 
     def test_candidate_review_is_hard_human_stop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, context = make_project(Path(directory))
-            change = project / "changes" / "active" / "chg"
-            write_yaml(change / "change.yaml", base_change("chg"))
-            write_review_inputs(change)
-            freeze_then_implement(context, change)
+            _, context = make_atomic_project(Path(directory))
+            prepare_atomic_change(context.project_root, context)
+            pass_atomic_review(context)
+            self.assertEqual(advance_change(context, "chg-one"), "candidate-review")
 
-            record_readiness(
-                context,
-                "chg",
-                criterion_id="focused",
-                result="pass",
-                command_or_entry="pytest focused",
-                evidence="test-log.txt",
-            )
-            finalize_readiness(context, "chg")
-            mark_current_review_pass(context, change)
-            self.assertEqual(advance_change(context, "chg"), "candidate-review")
-
-            dashboard = build_change_dashboard(context, "chg")
+            dashboard = build_change_dashboard(context, "chg-one")
             self.assertIn("user-review", dashboard["allowed_next"])
             self.assertIn("final verification", dashboard["blocked_next"])
             with self.assertRaisesRegex(ChangeLifecycleError, "user acceptance"):
-                advance_change(context, "chg")
+                advance_change(context, "chg-one")
 
             record_user_review(
                 context,
-                "chg",
+                "chg-one",
                 decision="approved",
                 evidence="user accepted representative result",
             )
-            self.assertEqual(advance_change(context, "chg"), "verifying")
+            self.assertEqual(advance_change(context, "chg-one"), "verifying")
 
     def test_changes_requested_returns_to_implementation_and_stales_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, context = make_project(Path(directory))
-            change = project / "changes" / "active" / "chg"
-            write_yaml(change / "change.yaml", base_change("chg"))
-            write_review_inputs(change)
-            freeze_then_implement(context, change)
-            record_readiness(
-                context,
-                "chg",
-                criterion_id="focused",
-                result="pass",
-                command_or_entry="pytest focused",
-                evidence="test-log.txt",
-            )
-            finalize_readiness(context, "chg")
-            mark_current_review_pass(context, change)
-            advance_change(context, "chg")
+            _, context = make_atomic_project(Path(directory))
+            change = prepare_atomic_change(context.project_root, context)
+            pass_atomic_review(context)
+            advance_change(context, "chg-one")
             state = record_user_review(
                 context,
-                "chg",
+                "chg-one",
                 decision="changes-requested",
                 evidence="representative behavior is not acceptable",
             )
