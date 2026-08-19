@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -146,6 +147,44 @@ def prepare_change(project: Path, context: ProjectContext) -> Path:
     return change
 
 
+def _valid_codex_attestation(context: ProjectContext, packet: dict, session: str) -> dict:
+    requested = packet["requested_profile"]
+    profile = Path(str(requested["source"])).resolve()
+    profile_ref = profile.relative_to(context.package_root.resolve()).as_posix()
+    profile_hash = hashlib.sha256(profile.read_bytes()).hexdigest()
+    return {
+        "schema_version": 2,
+        "execution": {
+            "method": "app-server-isolated-agent",
+            "collector": "codex-app-server-managed-v1",
+            "session_ref": session,
+            "thread_id": "fixture-review",
+            "turn_id": "fixture-turn",
+        },
+        "observed": {
+            "agent": requested["agent"],
+            "agent_binding": "verified-thread-start-profile",
+            "model": requested["model"],
+            "tier": requested["tier"],
+            "reasoning_effort": requested["reasoning_effort"],
+            "sandbox_mode": "read-only",
+            "context_inheritance": "none",
+            "child_thread_id": "fixture-review",
+            "parent_thread_id": None,
+            "forked_from_id": None,
+            "cwd": str(context.project_root.resolve()),
+        },
+        "evidence": {
+            "source": "verified-app-server-managed",
+            "agent_profile_ref": profile_ref,
+            "agent_profile_sha256": profile_hash,
+            "developer_instructions_sha256": "fixture-instructions",
+            "thread_start_request_sha256": "fixture-thread-start",
+            "turn_start_request_sha256": "fixture-turn-start",
+        },
+    }
+
+
 def fake_role_runner(verdict: str):
     def run(context: ProjectContext, packet: dict, message: str) -> RoleRunResult:
         if packet.get("review_protocol") != 2:
@@ -167,13 +206,7 @@ def fake_role_runner(verdict: str):
             role_id="maintainer_reviewer",
             output=output,
             packet=packet,
-            attestation={
-                "schema_version": 2,
-                "execution": {
-                    "method": "app-server-isolated-agent",
-                    "session_ref": session,
-                },
-            },
+            attestation=_valid_codex_attestation(context, packet, session),
             evidence={"fixture": True},
             session_ref=session,
         )
@@ -222,6 +255,37 @@ class AtomicReviewTests(unittest.TestCase):
             self.assertEqual(advance_change(context, "chg-one"), "candidate-review")
             validated = validate_change(project, change)
             self.assertEqual(validated.returncode, 0, validated.stderr)
+
+    def test_protocol2_review_cannot_survive_deleted_or_tampered_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            change = prepare_change(project, context)
+            run_atomic_review(
+                context,
+                "chg-one",
+                role_runner=fake_role_runner(
+                    "  architecture: pass\n"
+                    "  scope: pass\n"
+                    "  numerical_evidence: pass\n"
+                    "  remediation_route: null\n"
+                ),
+            )
+            data = load_yaml(change / "change.yaml")
+            attestation = project / data["review"]["execution"]["attestation_ref"]
+            original = attestation.read_text(encoding="utf-8")
+
+            attestation.unlink()
+            rejected = validate_change(project, change)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("attestation", rejected.stderr.lower())
+
+            attestation.write_text(original, encoding="utf-8")
+            tampered = load_yaml(attestation)
+            tampered["execution"]["session_ref"] = "app-server-thread:forged"
+            write_yaml(attestation, tampered)
+            rejected = validate_change(project, change)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("session", rejected.stderr.lower())
 
     def test_implementation_block_returns_to_implementation_and_stales_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
