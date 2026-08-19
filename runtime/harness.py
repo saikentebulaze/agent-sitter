@@ -10,6 +10,19 @@ import _harness_v62_impl as _v62
 from _harness_v62_impl import *  # noqa: F401,F403
 
 
+# Preserve the historical seam used by V6 regression tests and downstream
+# callers that replace the base Knowledge mutation while proving the authority
+# preflight fails first. The wrapper synchronizes the facade value into the
+# implementation module before dispatch, so moving CLI discovery into this thin
+# module does not silently break the old monkeypatch contract.
+_base_command_promote_knowledge = _v62._base_command_promote_knowledge
+
+
+def command_promote_knowledge(context, change, reviewed_by, evidence):
+    _v62._base_command_promote_knowledge = _base_command_promote_knowledge
+    return _v62.command_promote_knowledge(context, change, reviewed_by, evidence)
+
+
 _V62_HELP = """
 V6.2 high-level commands:
   freeze-readiness CHANGE
