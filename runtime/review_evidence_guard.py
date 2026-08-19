@@ -84,7 +84,17 @@ def validate_current_protocol2_review(change: Path, data: dict) -> None:
 
     review = data.get("review") or {}
     execution = review.get("execution") or {}
-    if int(execution.get("review_protocol") or 1) != 2:
+    protocol = int(execution.get("review_protocol") or 1)
+    if protocol != 2:
+        snapshot = execution.get("input_snapshot") or {}
+        if (
+            data.get("candidate_readiness_protocol") == 1
+            and review.get("status") in {"pass", "warn"}
+            and int(snapshot.get("snapshot_protocol") or 1) == 2
+        ):
+            raise ReviewEvidenceError(
+                "V6.2 snapshot-2 review metadata is missing Review Protocol 2 runtime proof"
+            )
         return
 
     round_number = execution.get("round")
