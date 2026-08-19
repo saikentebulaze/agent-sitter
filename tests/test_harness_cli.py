@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class HarnessCliTests(unittest.TestCase):
-    def test_closure_cli_lists_review_commands(self) -> None:
+    def test_closure_cli_lists_legacy_and_v62_commands(self) -> None:
         result = subprocess.run(
             [sys.executable, str(ROOT / "runtime" / "harness.py"), "--help"],
             cwd=ROOT, text=True, encoding="utf-8", capture_output=True,
@@ -18,8 +18,14 @@ class HarnessCliTests(unittest.TestCase):
         for command in (
             "status", "validate-change", "review", "record-review",
             "render-knowledge-diff", "promote-knowledge", "archive",
+            "freeze-readiness", "record-readiness", "finalize-readiness",
+            "prepare-candidate", "user-review", "record-verification",
+            "render", "advance",
         ):
             self.assertIn(command, result.stdout)
+        self.assertIn("Change ID, Change directory, or change.yaml path", result.stdout)
+        self.assertIn("Task ID, Task directory, or task.yaml path", result.stdout)
+        self.assertIn("review CHANGE --run", result.stdout)
 
     def test_work_cli_lists_v4_graph_and_delegation_commands(self) -> None:
         result = subprocess.run(
