@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import yaml
@@ -23,6 +25,20 @@ def _load_yaml(path: Path, label: str) -> dict:
     return data
 
 
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def _project_path(project_root: Path, value: object, label: str) -> Path:
     text = str(value or "").strip()
     if not text:
@@ -42,7 +58,7 @@ def _request_for_current_round(change: Path, round_number: int) -> tuple[Path, s
         return archived, "archived Protocol 2 review request"
 
     # record_review validates the prospective Change before moving the pending
-    # request into reviews/.  Accept that exact in-transaction location so the
+    # request into reviews/. Accept that exact in-transaction location so the
     # same evidence guard protects both the transaction and later static checks.
     pending = change / "review-request.yaml"
     if pending.is_file():
@@ -107,6 +123,26 @@ def validate_current_protocol2_review(change: Path, data: dict) -> None:
             raise ReviewEvidenceError(
                 f"current review {execution_key} differs from the frozen runtime execution"
             )
+
+    # runtime_execution was attached only after the Provider returned. Remove it
+    # and prove the archived packet still hashes to the exact pre-execution
+    # request that the runtime was asked to execute.
+    frozen_request = dict(request)
+    frozen_request.pop("runtime_execution", None)
+    expected_request_hash = str(execution.get("execution_request_sha256") or "")
+    if _canonical_sha256(frozen_request) != expected_request_hash:
+        raise ReviewEvidenceError("frozen review request no longer matches the executed request hash")
+
+    production_diff = request.get("production_diff") or {}
+    diff_path = _project_path(
+        project_root, production_diff.get("ref"), "review production_diff.ref"
+    )
+    if not diff_path.is_file():
+        raise ReviewEvidenceError(f"frozen review production diff is missing: {diff_path}")
+    if _text_sha256(diff_path.read_text(encoding="utf-8")) != str(
+        production_diff.get("sha256") or ""
+    ):
+        raise ReviewEvidenceError("frozen review production diff no longer matches its hash")
 
     session_ref = str(execution.get("session_ref") or "")
     if not session_ref or str(execution.get("evidence_ref") or "") != session_ref:
