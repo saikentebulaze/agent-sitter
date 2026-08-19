@@ -8,6 +8,10 @@ from production_snapshot import production_snapshot_sha256
 from project_context import ProjectContext
 from readiness import ReadinessError, validate_readiness_contract
 from reference_resolver import resolve_change_ref
+from review_evidence_guard import (
+    ReviewEvidenceError,
+    validate_current_protocol2_review,
+)
 from review_transaction import atomic_write_yaml
 from work_graph import now_iso
 
@@ -192,6 +196,13 @@ def build_change_dashboard(context: ProjectContext, change_value: str | Path) ->
     }
 
 
+def _reprove_current_review(change: Path, data: dict) -> None:
+    try:
+        validate_current_protocol2_review(change, data)
+    except ReviewEvidenceError as error:
+        raise ChangeLifecycleError(str(error)) from error
+
+
 def advance_change(context: ProjectContext, change_value: str | Path) -> str:
     ref = resolve_change_ref(context, change_value)
     data = _load(ref.yaml_path)
@@ -202,6 +213,11 @@ def advance_change(context: ProjectContext, change_value: str | Path) -> str:
     status = str(data.get("status") or "")
     if status not in V62_STATUSES:
         raise ChangeLifecycleError(f"invalid V6.2 Change status: {status}")
+
+    # A semantic transition may never rely only on review metadata copied into
+    # change.yaml. If the current review is Protocol 2, re-prove its frozen
+    # request and Provider attestation before any lifecycle advancement.
+    _reprove_current_review(ref.root, data)
 
     if status == "implementing":
         _require_candidate_review_preflight(context, data)
