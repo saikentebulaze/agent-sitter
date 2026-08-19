@@ -36,16 +36,31 @@ def _project_path(project_root: Path, value: object, label: str) -> Path:
     return path
 
 
+def _request_for_current_round(change: Path, round_number: int) -> tuple[Path, str]:
+    archived = change / "reviews" / f"round-{round_number}.request.yaml"
+    if archived.is_file():
+        return archived, "archived Protocol 2 review request"
+
+    # record_review validates the prospective Change before moving the pending
+    # request into reviews/.  Accept that exact in-transaction location so the
+    # same evidence guard protects both the transaction and later static checks.
+    pending = change / "review-request.yaml"
+    if pending.is_file():
+        packet = _load_yaml(pending, "pending Protocol 2 review request")
+        if packet.get("round") == round_number:
+            return pending, "pending Protocol 2 review request"
+    return archived, "archived Protocol 2 review request"
+
+
 def validate_current_protocol2_review(change: Path, data: dict) -> None:
     """Re-prove the current Protocol-2 review from persisted runtime evidence.
 
     Shape validation in ``change.yaml`` is not sufficient for a V6.2 closure
     gate: a user or Agent could otherwise fabricate plausible Provider/session
-    metadata by hand.  The current review must point back to the archived frozen
-    request and to a real Provider attestation that validates against that exact
-    request.
+    metadata by hand. The current review must point back to the frozen request
+    and to a real Provider attestation that validates against that exact request.
 
-    Historical superseded rounds are not revalidated here.  The current review
+    Historical superseded rounds are not revalidated here. The current review
     is the assurance artifact used by Candidate/final lifecycle gates; older
     rounds remain immutable provenance but need not keep runtime staging alive
     forever.
@@ -61,24 +76,24 @@ def validate_current_protocol2_review(change: Path, data: dict) -> None:
         raise ReviewEvidenceError("Protocol 2 review has an invalid round")
 
     project_root = change.resolve().parents[2]
-    request_path = change / "reviews" / f"round-{round_number}.request.yaml"
-    request = _load_yaml(request_path, "archived Protocol 2 review request")
+    request_path, request_label = _request_for_current_round(change, round_number)
+    request = _load_yaml(request_path, request_label)
     if int(request.get("review_protocol") or 1) != 2:
-        raise ReviewEvidenceError("archived review request is not Protocol 2")
+        raise ReviewEvidenceError("frozen review request is not Protocol 2")
     if request.get("round") != round_number:
-        raise ReviewEvidenceError("archived review request round does not match current review")
+        raise ReviewEvidenceError("frozen review request round does not match current review")
     if str(request.get("change_id") or "") != str(data.get("id") or change.name):
-        raise ReviewEvidenceError("archived review request change_id does not match current Change")
+        raise ReviewEvidenceError("frozen review request change_id does not match current Change")
 
     provider = str(execution.get("provider") or "")
     request_provider = str((request.get("runtime") or {}).get("provider") or "")
     if provider != request_provider:
-        raise ReviewEvidenceError("current review Provider differs from the archived request")
+        raise ReviewEvidenceError("current review Provider differs from the frozen request")
 
     requested = request.get("requested_profile") or {}
     requested_role = str(requested.get("role_id") or requested.get("agent") or "")
     if str(execution.get("agent") or "") != requested_role:
-        raise ReviewEvidenceError("current reviewer role differs from the archived request")
+        raise ReviewEvidenceError("current reviewer role differs from the frozen request")
 
     runtime_execution = request.get("runtime_execution") or {}
     for key, execution_key in (
@@ -90,7 +105,7 @@ def validate_current_protocol2_review(change: Path, data: dict) -> None:
     ):
         if str(runtime_execution.get(key) or "") != str(execution.get(execution_key) or ""):
             raise ReviewEvidenceError(
-                f"current review {execution_key} differs from the archived runtime execution"
+                f"current review {execution_key} differs from the frozen runtime execution"
             )
 
     session_ref = str(execution.get("session_ref") or "")
