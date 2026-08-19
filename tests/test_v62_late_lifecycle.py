@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNTIME = ROOT / "runtime"
+TESTS = ROOT / "tests"
+for path in (RUNTIME, TESTS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from change_lifecycle import (  # noqa: E402
     ChangeLifecycleError,
