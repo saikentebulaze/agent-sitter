@@ -13,11 +13,14 @@ RUNTIME = ROOT / "runtime"
 if str(RUNTIME) not in sys.path:
     sys.path.insert(0, str(RUNTIME))
 
+from _learning_impl import command_closeout, command_intake  # noqa: E402
 from archive_lifecycle import ArchiveLifecycleError, finalize_archive_cleanup  # noqa: E402
 from change_lifecycle import advance_change, build_change_dashboard, record_user_review  # noqa: E402
 from evidence_projection import record_verification  # noqa: E402
+from governed_work import complete_task  # noqa: E402
 from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge  # noqa: E402
-from readiness import record_readiness  # noqa: E402
+from provider_task import initialize_provider_task  # noqa: E402
+from readiness import freeze_readiness_contract, record_readiness  # noqa: E402
 from review_runner import run_atomic_review  # noqa: E402
 from test_v62_atomic_review import (  # noqa: E402
     fake_role_runner,
@@ -42,6 +45,32 @@ def write_manifest_lock(project: Path) -> None:
     lock = project / ".harness/sitter/manifest-lock.yaml"
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text("package: sitter\nformat_version: 1\n", encoding="utf-8")
+
+
+def archive_change(project: Path, change: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(RUNTIME / "archive_change.py"),
+            str(change),
+            "--project",
+            str(project),
+        ],
+        cwd=project,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    )
+
+
+def validate_change(project: Path, change: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(RUNTIME / "validate_change.py"), str(change)],
+        cwd=project,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+    )
 
 
 class V62RC2ClosureTests(unittest.TestCase):
@@ -98,9 +127,6 @@ class V62RC2ClosureTests(unittest.TestCase):
                 "complete",
             )
 
-            # Reproduce the real revise-change archive hold. A fresh readiness,
-            # review, human acceptance and final verification cycle has already
-            # covered the current snapshot, so this historical hold must clear.
             data = load_yaml(change / "change.yaml")
             data["archive"]["blockers"] = ["change revised after investigation"]
             write_yaml(change / "change.yaml", data)
@@ -109,24 +135,92 @@ class V62RC2ClosureTests(unittest.TestCase):
             data = load_yaml(change / "change.yaml")
             self.assertEqual(data["archive"]["blockers"], [])
 
-            archived = subprocess.run(
-                [
-                    sys.executable,
-                    str(RUNTIME / "archive_change.py"),
-                    str(change),
-                    "--project",
-                    str(project),
-                ],
-                cwd=project,
-                text=True,
-                encoding="utf-8",
-                capture_output=True,
-            )
+            archived = archive_change(project, change)
             self.assertEqual(archived.returncode, 0, archived.stderr)
             archived_root = project / "changes/archive/chg-one"
             self.assertTrue(archived_root.is_dir())
             self.assertFalse(change.exists())
             self.assertEqual(load_yaml(archived_root / "change.yaml")["status"], "archived")
+            validated = validate_change(project, archived_root)
+            self.assertEqual(validated.returncode, 0, validated.stderr)
+
+    def test_task_bound_zero_candidate_path_completes_task(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            write_manifest_lock(project)
+            task = initialize_provider_task(
+                context,
+                task_id="task-e2e",
+                title="RC2 complete closure",
+                entry="change",
+                provider_id="codex",
+                change_id="chg-e2e",
+            )
+            change = project / "changes/active/chg-e2e"
+            freeze_readiness_contract(context, "chg-e2e")
+            data = load_yaml(change / "change.yaml")
+            data["status"] = "implementing"
+            write_yaml(change / "change.yaml", data)
+            record_readiness(
+                context,
+                "chg-e2e",
+                criterion_id="focused-regression",
+                result="pass",
+                command_or_entry="fixture focused regression",
+                evidence="fixture:focused-pass",
+            )
+            candidate = prepare_candidate(
+                context,
+                "chg-e2e",
+                role_runner=fake_role_runner(PASS_VERDICT),
+            )
+            self.assertEqual(candidate["status"], "candidate-review")
+            record_user_review(
+                context,
+                "chg-e2e",
+                decision="approved",
+                evidence="fixture candidate approved",
+            )
+            self.assertEqual(advance_change(context, "chg-e2e"), "verifying")
+            record_verification(
+                context,
+                "chg-e2e",
+                result_id="full-regression",
+                kind="regression",
+                result="pass",
+                command_or_entry="fixture final regression",
+                evidence="fixture:final-pass",
+            )
+            self.assertEqual(advance_change(context, "chg-e2e"), "syncing")
+            defer_knowledge(
+                context,
+                "chg-e2e",
+                reason="No durable project knowledge from closure fixture",
+            )
+            finalize_archive_cleanup(
+                context,
+                "chg-e2e",
+                evidence="Task experiments directory is empty",
+            )
+            self.assertEqual(advance_change(context, "chg-e2e"), "ready-to-archive")
+            archived = archive_change(project, change)
+            self.assertEqual(archived.returncode, 0, archived.stderr)
+
+            task_yaml = task / "task.yaml"
+            command_intake(context, task_yaml, [], 5)
+            command_closeout(
+                context,
+                task_yaml,
+                "RC2 closure fixture produced no reusable learning candidate",
+            )
+            complete_task(
+                context,
+                "task-e2e",
+                rationale="Change archived and closure evidence is complete",
+            )
+            completed = load_yaml(task_yaml)
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["current_focus"]["type"], "none")
 
     def test_defer_requires_zero_candidates_and_reason(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
