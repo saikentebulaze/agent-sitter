@@ -69,7 +69,6 @@ def _require_current_review(context: ProjectContext, data: dict) -> None:
     execution = review.get("execution") or {}
     snapshot = execution.get("input_snapshot") or {}
     if int(snapshot.get("snapshot_protocol") or 1) != 2:
-        # V6.2 automatic closure relies on the semantic snapshot-2 contract.
         raise ChangeLifecycleError("V6.2 automatic closure requires review snapshot protocol 2")
     actual = _current_production(context)
     if str(snapshot.get("production_sha256") or "") != actual:
@@ -112,15 +111,7 @@ def _require_final_verification(data: dict) -> None:
 
 
 def _resolve_revision_archive_blocker(data: dict) -> None:
-    """Treat a completed post-revision assurance cycle as resolving its hold.
-
-    `revise-change` intentionally records a historical archive blocker so a
-    revised Change cannot close using pre-revision assurance. By the time the
-    syncing -> ready-to-archive transition reaches this helper, current
-    Readiness, Review and final Verification have already been re-proved on the
-    revised production snapshot. The history remains in revision_history; the
-    temporary closure hold must not become permanent.
-    """
+    """Treat a completed post-revision assurance cycle as resolving its hold."""
 
     archive = data.setdefault("archive", {})
     blockers = archive.get("blockers") or []
@@ -155,6 +146,7 @@ def build_change_dashboard(context: ProjectContext, change_value: str | Path) ->
     review = data.get("review") or {}
     verification = data.get("verification") or {}
     knowledge = data.get("knowledge_sync") or {}
+    archive = data.get("archive") or {}
     action_required: list[str] = []
     allowed_next: list[str] = []
     blocked_next: list[str] = []
@@ -207,10 +199,15 @@ def build_change_dashboard(context: ProjectContext, change_value: str | Path) ->
                 else:
                     action_required.append("review and promote durable Knowledge")
                     allowed_next.append("render-knowledge-diff")
+            elif archive.get("experiment_cleanup_complete") is not True:
+                action_required.append(
+                    "finalize archive cleanup after removing development experiments and temporary production files"
+                )
+                allowed_next.append("finalize-archive-cleanup")
             else:
                 allowed_next.append("advance to ready-to-archive")
         elif status == "ready-to-archive":
-            allowed_next.append("run the existing archive transaction")
+            allowed_next.append("archive")
     return {
         "id": data.get("id") or ref.id,
         "status": status,
@@ -220,6 +217,7 @@ def build_change_dashboard(context: ProjectContext, change_value: str | Path) ->
         "user_review": user_review.get("status"),
         "verification": verification.get("status"),
         "knowledge": knowledge.get("status"),
+        "archive_cleanup": archive.get("experiment_cleanup_complete"),
         "ACTION REQUIRED": action_required,
         "allowed_next": allowed_next,
         "blocked_next": blocked_next,
@@ -244,9 +242,6 @@ def advance_change(context: ProjectContext, change_value: str | Path) -> str:
     if status not in V62_STATUSES:
         raise ChangeLifecycleError(f"invalid V6.2 Change status: {status}")
 
-    # A semantic transition may never rely only on review metadata copied into
-    # change.yaml. If the current review is Protocol 2, re-prove its frozen
-    # request and Provider attestation before any lifecycle advancement.
     _reprove_current_review(ref.root, data)
 
     if status == "implementing":
