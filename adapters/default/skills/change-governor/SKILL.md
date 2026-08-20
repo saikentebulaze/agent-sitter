@@ -81,23 +81,11 @@ python "$Runtime\harness.py" --project $ProjectRoot record-readiness <change-id>
 python "$Runtime\harness.py" --project $ProjectRoot finalize-readiness <change-id>
 ```
 
-Production/test edits stale that evidence; Harness lifecycle/Markdown writes do not. After Readiness passes, run test finalization before reviewer work:
-
-```powershell
-python "$Runtime\finalize_tests.py" <change-id> --project $ProjectRoot
-```
-
-Then run the independent maintainer review for Architecture, Scope and Numerical Evidence, including whether representative evidence really exercises the target business chain. V6.2 normally uses `harness.py review <change-id> --run`; Deep review remains exceptional escalation.
+Production/test edits stale that evidence; Harness lifecycle/Markdown writes do not. Prefer `harness.py prepare-candidate <change-id>` once required readiness evidence exists: it finalizes tests, mechanically checks changed production/test paths against an explicit Change Budget before spending Reviewer cost, runs the Provider-bound Reviewer, and advances only on PASS/WARN. If using the lower-level path, run `finalize_tests.py` before `harness.py review <change-id> --run`. Deep review remains exceptional escalation.
 
 A review BLOCK with remediation `implementation` is repaired inside already approved semantics without user interruption. `awaiting-production-design` means new scope/semantics are required and must reach the human checkpoint. Read `references/testing-policy.md`, `review-policy.md`, and `human-in-loop-policy.md` only in these phases.
 
-When Readiness, test finalization and independent review are valid:
-
-```powershell
-python "$Runtime\harness.py" --project $ProjectRoot advance <change-id>
-```
-
-If status becomes `candidate-review` with `user_review.status: pending`, summarize readiness evidence, highlight representative external/numerical results, state remaining limitations, ask the user to approve or request changes, then **STOP**. Do not run final/full regression, Knowledge, Learning closeout, archive, or another reviewer while acceptance is pending.
+When Readiness, test finalization and independent review are valid, `harness.py advance <change-id>` enters `candidate-review`. If `user_review.status: pending`, summarize readiness evidence, representative external/numerical results and known limitations, ask the user to approve or request changes, then **STOP**. Do not run final/full regression, Knowledge, Learning closeout, archive, or another reviewer while acceptance is pending.
 
 Record the decision only through Harness:
 
@@ -106,13 +94,15 @@ python "$Runtime\harness.py" --project $ProjectRoot user-review <change-id> `
   --decision approved|changes-requested|not-required --evidence "..."
 ```
 
-`not-required` requires explicit user evidence; the Agent may not choose it for convenience. `changes-requested` returns to implementation and stales Readiness. `approved` permits the next `advance` into final verification. Broad PASS evidence added after approval need not invalidate the earlier review when production/design/authority/readiness inputs remain unchanged; production or semantic changes do.
+`not-required` requires explicit user evidence; the Agent may not choose it for convenience. `changes-requested` returns to implementation and stales Readiness. `approved` permits final verification. Broad PASS evidence added after approval need not invalidate the earlier review when production/design/authority/readiness inputs remain unchanged; production or semantic changes do.
+
+After final verification advances the Change to `syncing`, follow `harness.py status`: if no durable Knowledge candidates exist, use `defer-knowledge --reason "..."`; never fake promotion or silently auto-defer. After Knowledge is promoted/deferred, remove any development experiments/temporary production files and run `finalize-archive-cleanup --evidence "..."`; this transaction checks but never deletes artifacts. Then `advance` may reach `ready-to-archive`, and `archive` records `archived` before Task completion. A historical `change revised after investigation` hold is cleared only after the current post-revision Readiness, Review and final Verification have all been re-proved.
 
 ## Learning and completion
 
 Do not pull LOW Fast Path work into the Work Graph merely for Learning. Governed Tasks retain Learning/completion obligations. Durable candidates still require user review before promotion. Before completion ensure Investigations are concluded, Changes archived/abandoned, required delegations/escalations resolved, temporary artifacts gone, and required Learning closeout satisfied.
 
-Useful status commands: `work.py task-status <task-id>`, `work.py validate <task-id>`, `harness.py status <change-id>`, `harness.py validate-change <change-id>`. For `candidate-review`, `harness.py status` is authoritative about `ACTION REQUIRED`, `allowed_next`, and `blocked_next`.
+Useful status commands: `work.py task-status <task-id>`, `work.py validate <task-id>`, `harness.py status <change-id>`, `harness.py validate-change <change-id>`. `harness.py status` is authoritative about `ACTION REQUIRED`, `allowed_next`, and `blocked_next`; it must only recommend commands the runtime actually exposes.
 
 ## Progressive disclosure
 
