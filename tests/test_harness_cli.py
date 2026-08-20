@@ -20,7 +20,7 @@ class HarnessCliTests(unittest.TestCase):
             "render-knowledge-diff", "promote-knowledge", "archive",
             "freeze-readiness", "record-readiness", "finalize-readiness",
             "prepare-candidate", "user-review", "record-verification",
-            "render", "advance",
+            "defer-knowledge", "render", "advance",
         ):
             self.assertIn(command, result.stdout)
         self.assertIn("Change ID, Change directory, or change.yaml path", result.stdout)
