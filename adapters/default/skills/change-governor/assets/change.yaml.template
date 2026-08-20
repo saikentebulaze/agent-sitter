@@ -128,9 +128,12 @@ knowledge_sync:
   reviewed_at:
   review_evidence:
   deferred_reason:
+  deferred_at:
   human_decisions_sha256:
 
 archive:
   experiment_cleanup_complete: false
+  cleanup_evidence:
+  cleanup_at:
   temporary_production_files: []
   blockers: []
