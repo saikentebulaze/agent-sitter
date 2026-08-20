@@ -33,6 +33,47 @@ def _validate(context, source: Path) -> None:
         raise SystemExit(result.returncode)
 
 
+def _rebase_ref(value: object, active_prefix: str, archive_prefix: str) -> object:
+    if isinstance(value, str) and value.replace("\\", "/").startswith(active_prefix):
+        normalized = value.replace("\\", "/")
+        return archive_prefix + normalized[len(active_prefix):]
+    return value
+
+
+def _rebase_change_local_refs(data: dict, change_id: str) -> None:
+    """Rebase only operational refs whose files move with the Change.
+
+    Do not rewrite Readiness/Verification/Human-Decision evidence strings: those
+    values participate in frozen semantic digests. The paths below are closure
+    plumbing rather than reviewed production semantics.
+    """
+
+    active_prefix = f"changes/active/{change_id}/"
+    archive_prefix = f"changes/archive/{change_id}/"
+
+    methodology = data.get("methodology") or {}
+    methodology["test_cleanup_evidence"] = _rebase_ref(
+        methodology.get("test_cleanup_evidence"), active_prefix, archive_prefix
+    )
+
+    review = data.get("review") or {}
+    execution = review.get("execution") or {}
+    execution["output_ref"] = _rebase_ref(
+        execution.get("output_ref"), active_prefix, archive_prefix
+    )
+    for round_data in data.get("review_history") or []:
+        if not isinstance(round_data, dict):
+            continue
+        round_execution = round_data.get("execution") or {}
+        round_execution["output_ref"] = _rebase_ref(
+            round_execution.get("output_ref"), active_prefix, archive_prefix
+        )
+
+    knowledge = data.get("knowledge_sync") or {}
+    for key in ("candidate_ref", "rendered_diff_ref"):
+        knowledge[key] = _rebase_ref(knowledge.get(key), active_prefix, archive_prefix)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("change", type=Path)
@@ -56,7 +97,6 @@ def main() -> None:
     if str(data.get("status") or "") != "ready-to-archive":
         raise SystemExit("Change must be ready-to-archive before archive transaction")
 
-    # Prove the pre-archive state first. Dry-run never mutates lifecycle state.
     _validate(context, source)
     target = context.project_root / "changes/archive" / source.name
     if target.exists():
@@ -67,13 +107,14 @@ def main() -> None:
 
     original = change_yaml.read_text(encoding="utf-8")
     data["status"] = "archived"
+    _rebase_change_local_refs(data, source.name)
     try:
-        atomic_write_yaml(change_yaml, data)
-        # Archived is a real lifecycle state, not merely a directory location.
-        # Validate it before moving so Task completion can later trust the state.
-        _validate(context, source)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(target))
+        atomic_write_yaml(target / "change.yaml", data)
+        # Archived state must itself validate at its final location. This catches
+        # stale active-path refs before the archive transaction can report success.
+        _validate(context, target)
     except BaseException:
         if target.exists() and not source.exists():
             source.parent.mkdir(parents=True, exist_ok=True)
