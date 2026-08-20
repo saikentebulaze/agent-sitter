@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import sys
+from pathlib import Path
 
 import _harness_v62_impl as _v62
 from _harness_v62_impl import *  # noqa: F401,F403
+from change_budget_preflight import (
+    ChangeBudgetPreflightError,
+    validate_change_budget_preflight,
+)
+from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge
+from project_context import resolve_project_context
 
 
 # Preserve the historical seam used by V6 regression tests and downstream
@@ -34,11 +42,13 @@ V6.2 high-level commands:
   review CHANGE --run [--reviewer maintainer|deep]
       Run, attest, parse, and record the independent Provider-bound reviewer atomically.
   prepare-candidate CHANGE [--retain PATH=REASON] [--preexisting PATH=REASON]
-      Finalize readiness/tests, run independent review, and advance to the human stop.
+      Finalize readiness/tests, scope-preflight, run independent review, and advance to the human stop.
   user-review CHANGE --decision approved|changes-requested|not-required --evidence TEXT
       Record the human Candidate acceptance decision transactionally.
   record-verification CHANGE --id ID --kind KIND --result pass|partial|fail ...
       Record authoritative final-verification evidence after human acceptance.
+  defer-knowledge CHANGE --reason TEXT
+      Explicitly defer Knowledge when syncing has no durable Knowledge candidates.
   render CHANGE
       Regenerate deterministic Markdown projections from structured evidence.
   advance CHANGE
@@ -68,11 +78,52 @@ def _print_combined_help() -> None:
     print(_V62_HELP)
 
 
+def _run_defer_knowledge(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Explicitly defer zero-candidate Knowledge")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("defer-knowledge")
+    command.add_argument("change")
+    command.add_argument("--reason", required=True)
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        status = defer_knowledge(context, args.change, reason=args.reason)
+        _v62.render_evidence(context, args.change)
+    except (KnowledgeLifecycleError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(f"Knowledge: {status}")
+
+
+def _preflight_direct_atomic_review(argv: list[str]) -> None:
+    if "review" not in argv or "--run" not in argv:
+        return
+    review_index = argv.index("review")
+    if review_index + 1 >= len(argv):
+        return
+    change = argv[review_index + 1]
+    project = Path.cwd()
+    if "--project" in argv:
+        index = argv.index("--project")
+        if index + 1 >= len(argv):
+            return
+        project = Path(argv[index + 1])
+    try:
+        context = resolve_project_context(project)
+        validate_change_budget_preflight(context, change)
+    except (ChangeBudgetPreflightError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+
+
 def main() -> None:
     argv = sys.argv[1:]
     if argv in (["--help"], ["-h"]):
         _print_combined_help()
         return
+    if "defer-knowledge" in argv:
+        _run_defer_knowledge(argv)
+        return
+    _preflight_direct_atomic_review(argv)
     if not _v62._run_v62_command(argv):
         _v62._impl.main()
 
