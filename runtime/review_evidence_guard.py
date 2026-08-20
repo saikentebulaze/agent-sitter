@@ -52,14 +52,42 @@ def _project_path(project_root: Path, value: object, label: str) -> Path:
     return path
 
 
+def _frozen_change_local_path(
+    project_root: Path,
+    change: Path,
+    value: object,
+    label: str,
+) -> Path:
+    """Resolve an immutable request path after the owning Change was archived.
+
+    Review packets deliberately remain byte-for-byte frozen, so their readable
+    diff ref records the historical `changes/active/<id>/...` location. After
+    archive the same artifact moves with the Change. Resolve that historical ref
+    to the corresponding file under the current Change root without rewriting
+    the request or weakening its pre-execution hash proof.
+    """
+
+    path = _project_path(project_root, value, label)
+    if path.exists():
+        return path
+    text = str(value or "").replace("\\", "/").strip()
+    active_prefix = f"changes/active/{change.name}/"
+    if not text.startswith(active_prefix):
+        return path
+    relative = text[len(active_prefix):]
+    candidate = (change / relative).resolve()
+    try:
+        candidate.relative_to(change.resolve())
+    except ValueError as error:
+        raise ReviewEvidenceError(f"{label} escapes the archived Change: {text}") from error
+    return candidate
+
+
 def _request_for_current_round(change: Path, round_number: int) -> tuple[Path, str]:
     archived = change / "reviews" / f"round-{round_number}.request.yaml"
     if archived.is_file():
         return archived, "archived Protocol 2 review request"
 
-    # record_review validates the prospective Change before moving the pending
-    # request into reviews/. Accept that exact in-transaction location so the
-    # same evidence guard protects both the transaction and later static checks.
     pending = change / "review-request.yaml"
     if pending.is_file():
         packet = _load_yaml(pending, "pending Protocol 2 review request")
@@ -69,18 +97,7 @@ def _request_for_current_round(change: Path, round_number: int) -> tuple[Path, s
 
 
 def validate_current_protocol2_review(change: Path, data: dict) -> None:
-    """Re-prove the current Protocol-2 review from persisted runtime evidence.
-
-    Shape validation in ``change.yaml`` is not sufficient for a V6.2 closure
-    gate: a user or Agent could otherwise fabricate plausible Provider/session
-    metadata by hand. The current review must point back to the frozen request
-    and to a real Provider attestation that validates against that exact request.
-
-    Historical superseded rounds are not revalidated here. The current review
-    is the assurance artifact used by Candidate/final lifecycle gates; older
-    rounds remain immutable provenance but need not keep runtime staging alive
-    forever.
-    """
+    """Re-prove the current Protocol-2 review from persisted runtime evidence."""
 
     review = data.get("review") or {}
     execution = review.get("execution") or {}
@@ -134,9 +151,6 @@ def validate_current_protocol2_review(change: Path, data: dict) -> None:
                 f"current review {execution_key} differs from the frozen runtime execution"
             )
 
-    # runtime_execution was attached only after the Provider returned. Remove it
-    # and prove the archived packet still hashes to the exact pre-execution
-    # request that the runtime was asked to execute.
     frozen_request = dict(request)
     frozen_request.pop("runtime_execution", None)
     expected_request_hash = str(execution.get("execution_request_sha256") or "")
@@ -144,8 +158,11 @@ def validate_current_protocol2_review(change: Path, data: dict) -> None:
         raise ReviewEvidenceError("frozen review request no longer matches the executed request hash")
 
     production_diff = request.get("production_diff") or {}
-    diff_path = _project_path(
-        project_root, production_diff.get("ref"), "review production_diff.ref"
+    diff_path = _frozen_change_local_path(
+        project_root,
+        change,
+        production_diff.get("ref"),
+        "review production_diff.ref",
     )
     if not diff_path.is_file():
         raise ReviewEvidenceError(f"frozen review production diff is missing: {diff_path}")
