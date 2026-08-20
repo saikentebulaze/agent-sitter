@@ -37,10 +37,17 @@ PASS_VERDICT = (
 )
 
 
+def write_manifest_lock(project: Path) -> None:
+    lock = project / ".harness/sitter/manifest-lock.yaml"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("package: sitter\nformat_version: 1\n", encoding="utf-8")
+
+
 class V62RC2ClosureTests(unittest.TestCase):
     def test_zero_candidate_defer_revised_hold_and_archive_close_legally(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project, context = make_project(Path(directory))
+            write_manifest_lock(project)
             change = prepare_change(project, context)
             run_atomic_review(
                 context,
