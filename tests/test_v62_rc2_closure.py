@@ -13,6 +13,7 @@ RUNTIME = ROOT / "runtime"
 if str(RUNTIME) not in sys.path:
     sys.path.insert(0, str(RUNTIME))
 
+from archive_lifecycle import ArchiveLifecycleError, finalize_archive_cleanup  # noqa: E402
 from change_lifecycle import advance_change, build_change_dashboard, record_user_review  # noqa: E402
 from evidence_projection import record_verification  # noqa: E402
 from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge  # noqa: E402
@@ -86,12 +87,22 @@ class V62RC2ClosureTests(unittest.TestCase):
                 "deferred",
             )
 
+            dashboard = build_change_dashboard(context, "chg-one")
+            self.assertEqual(dashboard["allowed_next"], ["finalize-archive-cleanup"])
+            self.assertEqual(
+                finalize_archive_cleanup(
+                    context,
+                    "chg-one",
+                    evidence="Task experiments inspected; no development artifacts remain",
+                ),
+                "complete",
+            )
+
             # Reproduce the real revise-change archive hold. A fresh readiness,
             # review, human acceptance and final verification cycle has already
             # covered the current snapshot, so this historical hold must clear.
             data = load_yaml(change / "change.yaml")
             data["archive"]["blockers"] = ["change revised after investigation"]
-            data["archive"]["experiment_cleanup_complete"] = True
             write_yaml(change / "change.yaml", data)
 
             self.assertEqual(advance_change(context, "chg-one"), "ready-to-archive")
@@ -133,6 +144,24 @@ class V62RC2ClosureTests(unittest.TestCase):
             with self.assertRaisesRegex(KnowledgeLifecycleError, "reason is required"):
                 defer_knowledge(context, "chg-one", reason="   ")
 
+    def test_archive_cleanup_refuses_remaining_experiment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            change = prepare_change(project, context)
+            data = load_yaml(change / "change.yaml")
+            data["status"] = "syncing"
+            write_yaml(change / "change.yaml", data)
+            experiment = project / ".agent-work/task-one/experiments/probe.txt"
+            experiment.parent.mkdir(parents=True, exist_ok=True)
+            experiment.write_text("development probe\n", encoding="utf-8")
+            with self.assertRaisesRegex(ArchiveLifecycleError, "development experiments remain"):
+                finalize_archive_cleanup(
+                    context,
+                    "chg-one",
+                    evidence="cleanup checked",
+                )
+            self.assertFalse(load_yaml(change / "change.yaml")["archive"]["experiment_cleanup_complete"])
+
     def test_prepare_candidate_blocks_out_of_budget_artifact_before_reviewer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project, change, context = setup_fixture(
@@ -146,8 +175,6 @@ class V62RC2ClosureTests(unittest.TestCase):
             data = yaml.safe_load((change / "change.yaml").read_text(encoding="utf-8"))
             data["change_budget"]["allowed_files"] = ["src.cpp"]
             write_yaml(change / "change.yaml", data)
-            # Rebind the focused evidence to the current production snapshot so
-            # the failure proves Change Budget preflight, not stale readiness.
             record_readiness(
                 context,
                 "chg",
