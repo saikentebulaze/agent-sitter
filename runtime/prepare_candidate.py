@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from change_budget_preflight import (
+    ChangeBudgetPreflightError,
+    validate_change_budget_preflight,
+)
 from change_lifecycle import ChangeLifecycleError, advance_change
 from evidence_projection import EvidenceProjectionError, render_evidence
 from finalize_tests import (
@@ -50,6 +54,10 @@ def prepare_candidate(
             retained=retained_map,
             preexisting=preexisting_map,
         )
+        # Scope mistakes such as generated XLSX/CSV/binaries outside the
+        # approved Change Budget are mechanical facts. Reject them before
+        # spending an independent Reviewer round.
+        validate_change_budget_preflight(context, ref.root)
         # Refresh human-readable projections before the reviewer starts. The
         # projection lives under `changes/` and therefore cannot mutate the
         # Production Snapshot that the review freezes.
@@ -65,6 +73,7 @@ def prepare_candidate(
     except (
         ReadinessError,
         TestHygieneError,
+        ChangeBudgetPreflightError,
         EvidenceProjectionError,
         AtomicReviewError,
         ValueError,
