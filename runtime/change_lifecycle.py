@@ -28,6 +28,7 @@ V62_STATUSES = {
     "archived",
 }
 USER_REVIEW_DECISIONS = {"approved", "changes-requested", "not-required"}
+REVISION_ARCHIVE_BLOCKER = "change revised after investigation"
 
 
 class ChangeLifecycleError(ValueError):
@@ -110,6 +111,26 @@ def _require_final_verification(data: dict) -> None:
         raise ChangeLifecycleError("final verification requires structured evidence")
 
 
+def _resolve_revision_archive_blocker(data: dict) -> None:
+    """Treat a completed post-revision assurance cycle as resolving its hold.
+
+    `revise-change` intentionally records a historical archive blocker so a
+    revised Change cannot close using pre-revision assurance. By the time the
+    syncing -> ready-to-archive transition reaches this helper, current
+    Readiness, Review and final Verification have already been re-proved on the
+    revised production snapshot. The history remains in revision_history; the
+    temporary closure hold must not become permanent.
+    """
+
+    archive = data.setdefault("archive", {})
+    blockers = archive.get("blockers") or []
+    if not isinstance(blockers, list):
+        raise ChangeLifecycleError("archive.blockers must be a list")
+    archive["blockers"] = [
+        blocker for blocker in blockers if str(blocker) != REVISION_ARCHIVE_BLOCKER
+    ]
+
+
 def _require_archive_readiness(data: dict) -> None:
     knowledge = data.get("knowledge_sync") or {}
     if knowledge.get("status") not in {"promoted", "deferred"}:
@@ -175,8 +196,17 @@ def build_change_dashboard(context: ProjectContext, change_value: str | Path) ->
             else:
                 allowed_next.append("advance to syncing")
         elif status == "syncing":
-            if knowledge.get("status") not in {"promoted", "deferred"}:
-                action_required.append("promote or explicitly defer durable Knowledge")
+            knowledge_status = str(knowledge.get("status") or "pending")
+            entries = knowledge.get("entries") or []
+            if knowledge_status not in {"promoted", "deferred"}:
+                if knowledge_status == "pending" and isinstance(entries, list) and not entries:
+                    action_required.append(
+                        "explicitly defer Knowledge because no durable candidates are recorded"
+                    )
+                    allowed_next.append("defer-knowledge")
+                else:
+                    action_required.append("review and promote durable Knowledge")
+                    allowed_next.append("render-knowledge-diff")
             else:
                 allowed_next.append("advance to ready-to-archive")
         elif status == "ready-to-archive":
@@ -257,6 +287,7 @@ def advance_change(context: ProjectContext, change_value: str | Path) -> str:
         _require_current_readiness(context, data)
         _require_current_review(context, data)
         _require_final_verification(data)
+        _resolve_revision_archive_blocker(data)
         _require_archive_readiness(data)
         data["status"] = "ready-to-archive"
         atomic_write_yaml(ref.yaml_path, data)
