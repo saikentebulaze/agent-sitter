@@ -10,6 +10,7 @@ from pathlib import Path
 
 import _harness_v62_impl as _v62
 from _harness_v62_impl import *  # noqa: F401,F403
+from archive_lifecycle import ArchiveLifecycleError, finalize_archive_cleanup
 from change_budget_preflight import (
     ChangeBudgetPreflightError,
     validate_change_budget_preflight,
@@ -49,6 +50,8 @@ V6.2 high-level commands:
       Record authoritative final-verification evidence after human acceptance.
   defer-knowledge CHANGE --reason TEXT
       Explicitly defer Knowledge when syncing has no durable Knowledge candidates.
+  finalize-archive-cleanup CHANGE --evidence TEXT
+      Prove Task experiments and temporary production artifacts are cleared before archive.
   render CHANGE
       Regenerate deterministic Markdown projections from structured evidence.
   advance CHANGE
@@ -95,6 +98,23 @@ def _run_defer_knowledge(argv: list[str]) -> None:
     print(f"Knowledge: {status}")
 
 
+def _run_finalize_archive_cleanup(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Finalize V6.2 archive cleanup")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("finalize-archive-cleanup")
+    command.add_argument("change")
+    command.add_argument("--evidence", required=True)
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        status = finalize_archive_cleanup(context, args.change, evidence=args.evidence)
+        _v62.render_evidence(context, args.change)
+    except (ArchiveLifecycleError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(f"Archive cleanup: {status}")
+
+
 def _preflight_direct_atomic_review(argv: list[str]) -> None:
     if "review" not in argv or "--run" not in argv:
         return
@@ -122,6 +142,9 @@ def main() -> None:
         return
     if "defer-knowledge" in argv:
         _run_defer_knowledge(argv)
+        return
+    if "finalize-archive-cleanup" in argv:
+        _run_finalize_archive_cleanup(argv)
         return
     _preflight_direct_atomic_review(argv)
     if not _v62._run_v62_command(argv):
