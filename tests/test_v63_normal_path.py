@@ -15,19 +15,22 @@ for path in (RUNTIME, TESTS):
         sys.path.insert(0, str(path))
 
 from _learning_impl import command_propose_durable  # noqa: E402
-from change_lifecycle import record_user_review  # noqa: E402
+from change_lifecycle import advance_change, record_user_review  # noqa: E402
 from complete_after_approval import (  # noqa: E402
     CompleteAfterApprovalError,
     complete_after_approval,
 )
+from evidence_projection import record_verification_batch  # noqa: E402
 from prepare_candidate import prepare_candidate  # noqa: E402
 from provider_task import initialize_provider_task  # noqa: E402
 from readiness import (  # noqa: E402
     ReadinessError,
+    finalize_readiness,
     freeze_readiness_contract,
     record_readiness_batch,
 )
 from test_v62_atomic_review import fake_role_runner, load_yaml, write_yaml  # noqa: E402
+from test_v62_candidate_readiness import base_change, freeze_then_implement  # noqa: E402
 from test_v62_rc2_closure import PASS_VERDICT, make_project, write_manifest_lock  # noqa: E402
 from test_v62_prepare_candidate import setup_fixture  # noqa: E402
 
@@ -85,6 +88,53 @@ def prepare_task_candidate(root: Path):
 
 
 class V63BatchEvidenceTests(unittest.TestCase):
+    def test_valid_multi_readiness_batch_commits_one_snapshot_and_finalizes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, context = make_project(Path(directory))
+            change = context.project_root / "changes/active/chg-batch"
+            data = base_change("chg-batch")
+            data["readiness"]["criteria"] = [
+                {
+                    "id": "focused",
+                    "kind": "focused-test",
+                    "required": True,
+                    "description": "focused behavior passes",
+                },
+                {
+                    "id": "build",
+                    "kind": "build",
+                    "required": True,
+                    "description": "build passes",
+                },
+            ]
+            write_yaml(change / "change.yaml", data)
+            freeze_then_implement(context, change)
+            committed = record_readiness_batch(
+                context,
+                "chg-batch",
+                [
+                    {
+                        "criterion_id": "focused",
+                        "result": "pass",
+                        "command_or_entry": "pytest focused",
+                        "evidence": "fixture:focused",
+                    },
+                    {
+                        "criterion_id": "build",
+                        "result": "pass",
+                        "command_or_entry": "cmake --build fixture",
+                        "evidence": "fixture:build",
+                    },
+                ],
+            )
+            self.assertEqual(len(committed), 2)
+            self.assertEqual(
+                len({item["production_snapshot_sha256"] for item in committed}),
+                1,
+            )
+            self.assertEqual(len({item["checked_at"] for item in committed}), 1)
+            self.assertEqual(finalize_readiness(context, "chg-batch")["status"], "pass")
+
     def test_invalid_readiness_batch_has_zero_writes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, change, context = setup_fixture(
@@ -124,6 +174,46 @@ class V63BatchEvidenceTests(unittest.TestCase):
 
 
 class V63CompleteAfterApprovalTests(unittest.TestCase):
+    def test_valid_multi_verification_batch_uses_one_snapshot_then_closes_without_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, context, _, _ = prepare_task_candidate(Path(directory))
+            record_user_review(
+                context,
+                "chg-v63",
+                decision="approved",
+                evidence="fixture acceptance",
+            )
+            self.assertEqual(advance_change(context, "chg-v63"), "verifying")
+            committed = record_verification_batch(
+                context,
+                "chg-v63",
+                [
+                    {
+                        "id": "focused-final",
+                        "kind": "regression",
+                        "result": "pass",
+                        "command_or_entry": "pytest focused final",
+                        "evidence": "fixture:focused-final",
+                    },
+                    {
+                        "id": "representative-final",
+                        "kind": "representative-case",
+                        "result": "pass",
+                        "command_or_entry": "run representative fixture",
+                        "evidence": "fixture:representative-final",
+                    },
+                ],
+            )
+            self.assertEqual(len(committed), 2)
+            self.assertEqual(
+                len({item["production_snapshot_sha256"] for item in committed}),
+                1,
+            )
+            self.assertEqual(len({item["checked_at"] for item in committed}), 1)
+            result = complete_after_approval(context, "chg-v63")
+            self.assertEqual(result["status"], "done")
+            self.assertTrue(result["engineering_complete"])
+
     def test_no_approval_cannot_record_final_verification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, context, _, change = prepare_task_candidate(Path(directory))
