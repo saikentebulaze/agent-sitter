@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +11,15 @@ from unittest import mock
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME = ROOT / "runtime"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(RUNTIME) not in sys.path:
+    sys.path.insert(0, str(RUNTIME))
+
+import install  # noqa: E402
+from production_snapshot import production_snapshot_sha256  # noqa: E402
+
 SCRIPT = ROOT / "scripts/acceptance/v63-pr-a-audit.py"
 spec = importlib.util.spec_from_file_location("v63_pr_a_audit", SCRIPT)
 assert spec and spec.loader
@@ -103,6 +114,54 @@ class V63RealTaskAuditTests(unittest.TestCase):
             ),
         ):
             return AUDIT.audit(project, "chg", phase)
+
+    def test_installed_snapshot_probe_matches_target_runtime_and_changes_with_production(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "installed-project"
+            project.mkdir()
+            subprocess.run(
+                ["git", "init", str(project)],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(project), "config", "user.email", "audit@example.invalid"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(project), "config", "user.name", "V63 Audit"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            source = project / "source.txt"
+            source.write_text("baseline\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(project), "add", "source.txt"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(project), "commit", "-m", "baseline"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            install.install(project, dry_run=False, provider_ids=("codex",))
+
+            first = AUDIT._installed_current_snapshot(project)
+            self.assertTrue(first["ok"], first.get("stderr"))
+            self.assertEqual(first["sha256"], production_snapshot_sha256(project))
+
+            source.write_text("changed\n", encoding="utf-8")
+            second = AUDIT._installed_current_snapshot(project)
+            self.assertTrue(second["ok"], second.get("stderr"))
+            self.assertEqual(second["sha256"], production_snapshot_sha256(project))
+            self.assertNotEqual(first["sha256"], second["sha256"])
 
     def test_candidate_phase_requires_true_human_stop_and_one_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
