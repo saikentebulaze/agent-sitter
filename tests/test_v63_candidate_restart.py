@@ -73,6 +73,29 @@ class V63CandidateRestartTests(unittest.TestCase):
             self.assertEqual((change / "change.yaml").read_bytes(), before)
             self.assertEqual(calls, [1])
 
+    def test_human_stop_reuse_fails_closed_after_production_change_without_new_reviewer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, change, context = setup_fixture(
+                Path(directory),
+                add_unclassified_test=False,
+            )
+            calls: list[int] = []
+            prepare_candidate(context, "chg", role_runner=pass_runner(calls))
+            (project / "src.cpp").write_text("// production changed after review\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                PrepareCandidateError,
+                "stale because production/test files changed",
+            ):
+                prepare_candidate(
+                    context,
+                    "chg",
+                    role_runner=pass_runner(calls),
+                )
+            self.assertEqual(calls, [1])
+            data = load_yaml(change / "change.yaml")
+            self.assertEqual(len(data["review_history"]), 1)
+            self.assertEqual(data["status"], "candidate-review")
+
 
 if __name__ == "__main__":
     unittest.main()
