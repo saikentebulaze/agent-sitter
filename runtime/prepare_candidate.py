@@ -15,7 +15,11 @@ from finalize_tests import (
     finalize_tests,
 )
 from project_context import ProjectContext
-from readiness import ReadinessError, finalize_readiness
+from readiness import (
+    ReadinessError,
+    finalize_readiness,
+    record_readiness_batch,
+)
 from reference_resolver import resolve_change_ref
 from review_runner import AtomicReviewError, run_atomic_review
 
@@ -28,6 +32,7 @@ def prepare_candidate(
     context: ProjectContext,
     change_value: str | Path,
     *,
+    readiness_batch: list[dict] | None = None,
     retained: list[str] | None = None,
     preexisting: list[str] | None = None,
     role: str = "maintainer_reviewer",
@@ -37,6 +42,8 @@ def prepare_candidate(
 ) -> dict:
     ref = resolve_change_ref(context, change_value)
     try:
+        if readiness_batch is not None:
+            record_readiness_batch(context, ref.root, readiness_batch)
         readiness = finalize_readiness(context, ref.root)
         retained_map = _parse_classifications(
             context,
@@ -54,9 +61,8 @@ def prepare_candidate(
             retained=retained_map,
             preexisting=preexisting_map,
         )
-        # Scope mistakes such as generated XLSX/CSV/binaries outside the
-        # approved Change Budget are mechanical facts. Reject them before
-        # spending an independent Reviewer round.
+        # Scope mistakes are deterministic facts. Reject them before spending an
+        # independent Reviewer round.
         validate_change_budget_preflight(context, ref.root)
         # Refresh human-readable projections before the reviewer starts. The
         # projection lives under `changes/` and therefore cannot mutate the
