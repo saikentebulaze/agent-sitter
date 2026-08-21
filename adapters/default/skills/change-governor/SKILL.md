@@ -74,6 +74,8 @@ python "$Runtime\harness.py" --project $ProjectRoot freeze-readiness <change-id>
 
 Never weaken criteria after seeing results. `standard` may use focused deterministic evidence; `behavioral` needs integration/representative external behavior; `numerical` needs representative-case, benchmark, or analytical-check. Unit tests alone cannot make a numerical Change Candidate Ready.
 
+Stage transaction batch files under `changes/active/<change-id>/` so they remain Harness state rather than undeclared project-root production artifacts. Structured values committed to `change.yaml` remain authoritative.
+
 After implementation and required engineering checks actually run, write all Readiness results to one YAML/JSON batch and run:
 
 ```powershell
