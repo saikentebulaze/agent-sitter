@@ -221,7 +221,7 @@ def main() -> None:
     if "prepare-candidate" in argv and "--readiness-batch" in argv:
         _run_prepare_candidate_batch(argv)
         return
-    if "complete-after-approval" in arv:
+    if "complete-after-approval" in argv:
         _run_complete_after_approval(argv)
         return
     if "defer-knowledge" in argv:
