@@ -84,15 +84,43 @@ def _installed_validation(project: Path, change: Path, task_id: str) -> dict:
     }
 
 
-def _common_checks(project: Path, change: Path, data: dict) -> dict:
+def _installed_current_snapshot(project: Path) -> dict:
+    """Compute the current Production Snapshot with the target project's installed Sitter."""
+
+    runtime = project / ".harness" / "sitter" / "runtime"
+    module = runtime / "production_snapshot.py"
+    if not module.is_file():
+        return {
+            "ok": False,
+            "sha256": None,
+            "stderr": "installed production_snapshot.py is missing",
+        }
+    code = (
+        "import sys; from pathlib import Path; "
+        "sys.path.insert(0, sys.argv[1]); "
+        "from production_snapshot import production_snapshot_sha256; "
+        "print(production_snapshot_sha256(Path(sys.argv[2])))"
+    )
+    result = _run(
+        [sys.executable, "-c", code, str(runtime), str(project)],
+        project,
+    )
+    result["sha256"] = result["stdout"] if result["ok"] and result["stdout"] else None
+    return result
+
+
+def _common_checks(project: Path, change: Path, data: dict, current_snapshot: str | None) -> dict:
+    readiness = data.get("readiness") or {}
     review = data.get("review") or {}
     execution = review.get("execution") or {}
     input_snapshot = execution.get("input_snapshot") or {}
     attestation_ref = execution.get("attestation_ref")
     runtime_evidence_ref = execution.get("runtime_evidence_ref") or execution.get("evidence_ref")
+    readiness_snapshot = str((readiness.get("production_snapshot") or {}).get("sha256") or "")
+    review_snapshot = str(input_snapshot.get("production_sha256") or "")
     return {
         "candidate_readiness_protocol_1": data.get("candidate_readiness_protocol") == 1,
-        "readiness_pass": (data.get("readiness") or {}).get("status") == "pass",
+        "readiness_pass": readiness.get("status") == "pass",
         "review_pass_or_warn": review.get("status") in {"pass", "warn"},
         "review_protocol_2": execution.get("review_protocol") == 2,
         "snapshot_protocol_2": input_snapshot.get("snapshot_protocol") == 2,
@@ -102,6 +130,11 @@ def _common_checks(project: Path, change: Path, data: dict) -> dict:
         "runtime_evidence_exists": _ref_exists(project, runtime_evidence_ref),
         "review_output_exists": _ref_exists(project, execution.get("output_ref")),
         "no_pending_review_request": not (change / "review-request.yaml").exists(),
+        "current_production_snapshot_available": bool(current_snapshot),
+        "readiness_matches_current_production": bool(current_snapshot)
+        and readiness_snapshot == current_snapshot,
+        "review_matches_current_production": bool(current_snapshot)
+        and review_snapshot == current_snapshot,
     }
 
 
@@ -114,13 +147,24 @@ def _candidate_checks(data: dict) -> dict:
     }
 
 
-def _closure_checks(data: dict, task: dict) -> tuple[dict, list[str]]:
+def _closure_checks(
+    data: dict,
+    task: dict,
+    current_snapshot: str | None,
+) -> tuple[dict, list[str]]:
     verification = data.get("verification") or {}
     knowledge = data.get("knowledge_sync") or {}
     archive = data.get("archive") or {}
     learning = task.get("learning") or {}
     attention = learning.get("user_attention") or {}
     pending: list[str] = []
+    final_results = [
+        item for item in verification.get("latest_results") or [] if isinstance(item, dict)
+    ]
+    verification_current = bool(current_snapshot) and bool(final_results) and all(
+        str(item.get("production_snapshot_sha256") or "") == current_snapshot
+        for item in final_results
+    )
 
     if data.get("status") != "archived":
         pending.append(f"Change status is {data.get('status')!r}, not archived")
@@ -141,7 +185,8 @@ def _closure_checks(data: dict, task: dict) -> tuple[dict, list[str]]:
         "candidate_acceptance_current": (data.get("user_review") or {}).get("status")
         in {"approved", "not-required"},
         "final_verification_pass_or_partial": verification.get("status") in {"pass", "partial"},
-        "final_verification_has_structured_results": bool(verification.get("latest_results") or []),
+        "final_verification_has_structured_results": bool(final_results),
+        "final_verification_matches_current_production": verification_current,
         "knowledge_resolved": knowledge.get("status") in {"promoted", "deferred"},
         "archive_cleanup_complete": archive.get("experiment_cleanup_complete") is True,
         "change_archived": data.get("status") == "archived",
@@ -165,18 +210,21 @@ def audit(project: Path, change_id: str, phase: str) -> dict:
     task = _load_yaml(task_path)
 
     validators = _installed_validation(project, change, task_id)
-    checks = _common_checks(project, change, data)
+    snapshot_result = _installed_current_snapshot(project)
+    current_snapshot = snapshot_result.get("sha256") if snapshot_result.get("ok") else None
+    checks = _common_checks(project, change, data, current_snapshot)
     pending: list[str] = []
     if phase == "candidate":
         checks.update(_candidate_checks(data))
     else:
-        closure, pending = _closure_checks(data, task)
+        closure, pending = _closure_checks(data, task, current_snapshot)
         checks.update(closure)
 
     critical_failures = [name for name, ok in checks.items() if not ok]
     # Task completion and archive state may be intentionally pending after engineering
     # completion; keep those as PENDING only in closure phase when validators and
-    # engineering proof still pass.
+    # engineering proof still pass. Currentness of frozen engineering evidence is
+    # always a hard failure, never a governance-only residual.
     soft = {
         "knowledge_resolved",
         "archive_cleanup_complete",
@@ -206,6 +254,7 @@ def audit(project: Path, change_id: str, phase: str) -> dict:
         "task": task_id,
         "change_status": data.get("status"),
         "task_status": task.get("status"),
+        "current_production_snapshot": snapshot_result,
         "review_rounds": len(review_history),
         "normal_success_single_reviewer": len(review_history) == 1,
         "installed_validation": validators,
