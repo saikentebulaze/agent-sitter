@@ -16,6 +16,7 @@ from evidence_projection import (
     render_evidence,
     validate_verification_batch,
 )
+from governed_validation import validate_governed_work_graph
 from governed_work import PivotTransactionError, complete_task
 from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge
 from project_context import ProjectContext
@@ -78,6 +79,35 @@ def _learning_closeout(context: ProjectContext, task_id: str) -> dict:
         task = _load(task_ref.yaml_path)
         learning = task.get("learning") or {}
     return learning
+
+
+def _task_work_blocker(
+    context: ProjectContext,
+    task_root: Path,
+    task: dict,
+) -> str | None:
+    """Return a pre-Learning Task blocker, preserving Task-wide closeout semantics."""
+
+    escalation = task.get("escalation") or {}
+    if escalation.get("level") != "none":
+        return "task cannot complete with an unresolved escalation"
+    graph = validate_governed_work_graph(context, task_root)
+    open_investigations = [
+        key
+        for key, value in graph.investigations.items()
+        if value.get("status") not in {"concluded", "closed"}
+    ]
+    if open_investigations:
+        return "task still has open investigations: " + ", ".join(open_investigations)
+    incomplete_changes = [
+        key
+        for key, (_, value) in graph.changes.items()
+        if value.get("status") != "archived"
+        and value.get("execution_state") != "abandoned"
+    ]
+    if incomplete_changes:
+        return "task still has non-archived changes: " + ", ".join(incomplete_changes)
+    return None
 
 
 def complete_after_approval(
@@ -212,6 +242,20 @@ def complete_after_approval(
                 idempotent=True,
             )
 
+        work_blocker = _task_work_blocker(context, task_ref.root, task_data)
+        if work_blocker:
+            return _result(
+                change_id,
+                status="governance-closure-pending",
+                engineering_complete=True,
+                governance_closure="task-work-remains",
+                archived=True,
+                blocker=work_blocker,
+            )
+
+        # Learning is Task-scoped. Assess it only when this really is the final
+        # Task closeout, so later work items cannot add observations after an
+        # already-frozen closeout assessment.
         learning = _learning_closeout(context, task_id)
         attention = learning.get("user_attention") or {}
         if attention.get("required") is True and attention.get("decision") == "pending":
