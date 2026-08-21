@@ -41,6 +41,9 @@ class V63NormalPathProjectionTests(unittest.TestCase):
         ):
             self.assertIn(marker, text)
 
+    def test_v63_does_not_add_another_version_facade(self) -> None:
+        self.assertFalse((RUNTIME / "_harness_v63_impl.py").exists())
+
     def test_codex_and_claude_skill_bridges_point_to_same_authoritative_governor(self) -> None:
         for projected in (
             codex_skill_wrapper_text(GOVERNOR),
