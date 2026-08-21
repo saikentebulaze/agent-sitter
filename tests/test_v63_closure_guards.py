@@ -91,6 +91,7 @@ class V63ClosureGuardTests(unittest.TestCase):
                 task_data["current_focus"],
                 {"type": "investigation", "ref": investigation_id},
             )
+            self.assertEqual(task_data["learning"]["closeout"]["status"], "pending")
 
     def test_repeating_completed_closure_is_idempotent_done(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
