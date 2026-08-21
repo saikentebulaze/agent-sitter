@@ -108,6 +108,11 @@ def complete_after_approval(
     try:
         status = str(data.get("status") or "")
         if verification_batch is not None:
+            if status not in {"candidate-review", "verifying"}:
+                raise CompleteAfterApprovalError(
+                    "Final Verification batch is only accepted before engineering verification closes; "
+                    "resume governance-only closure without --verification-batch"
+                )
             # Parse and validate the whole batch before the first lifecycle mutation.
             validate_verification_batch(verification_batch)
         elif status == "candidate-review":
