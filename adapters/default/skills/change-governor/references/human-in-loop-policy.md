@@ -2,6 +2,13 @@
 
 The default operating mode is **guided autonomy**: preserve long uninterrupted execution, but never let the Agent silently choose important algorithmic or engineering semantics.
 
+V6.2 distinguishes two different human boundaries:
+
+1. **Design/engineering decision authority** — required when multiple materially plausible semantics exist. This remains the V6 `human_in_loop` / Decision Authority mechanism.
+2. **Candidate acceptance** — after the Agent has already produced a technically credible candidate, the user decides whether that candidate matches the intended real-world behavior before expensive final closure begins. This is `user_review` at the `candidate-review` state.
+
+Do not merge these concepts. A task may have no unresolved design fork and still require Candidate acceptance.
+
 ## Modes
 
 - `autonomous`: the user explicitly delegates all currently identified design choices within the approved scope. Critical-surface and approval gates still apply.
@@ -66,12 +73,32 @@ New V6 Changes use `decision_authority_protocol: 1`. Review packets freeze a com
 
 This authority check is mechanical provenance, not a claim that a validator can semantically understand arbitrary Markdown or source code. Black-box acceptance must still test whether the Agent follows the user's decision in Design and implementation behavior.
 
+## Candidate acceptance
+
+For `candidate_readiness_protocol: 1`, Candidate acceptance occurs only after focused/representative Readiness evidence, test finalization and independent readiness review have already passed. Therefore `candidate-review` must not be used to hand the user a half-finished implementation.
+
+When a Change reaches `candidate-review` with `user_review.status: pending`, the Agent must:
+
+1. summarize the Candidate Readiness criteria and latest evidence;
+2. highlight the representative external-behavior / numerical result when applicable;
+3. state remaining known limitations;
+4. ask the user to approve or request changes;
+5. stop.
+
+Do not begin final/full regression, Knowledge, Learning closeout, archive work or a second reviewer while Candidate acceptance is pending.
+
+`user_review: not-required` is not an Agent convenience escape. It requires explicit user evidence that this Change may proceed without a separate Candidate acceptance stop.
+
+If the user requests changes, the Change returns to implementation and Candidate Readiness becomes stale. If the user approves, the Change may advance to final verification while the earlier readiness review remains valid only if its frozen production/design/authority inputs remain unchanged.
+
 ## Reviewer responsibility
 
 The Reviewer must check whether the implementation contains an unrecorded material semantic decision. Missing algorithm/state/acceptance decisions are Architecture or Numerical Evidence findings, not mere documentation issues.
 
 For a V6 review, the `decision_authority` projection in the frozen review request is authoritative. If Design, diff, Verification, or proposed durable Memory contradicts it, return BLOCK even if the contradictory behavior matches the Agent's earlier recommendation.
 
+For a V6.2 readiness review, a BLOCK that is deterministically repairable inside the already approved semantics should use remediation route `implementation`; a BLOCK requiring new product/engineering semantics should use `awaiting-production-design` and escalate to the user.
+
 ## Long-term evaluation
 
-Record cases where the checkpoint was unnecessary, too late, or missed an important decision. The goal is not maximum interruption or maximum autonomy; it is the smallest amount of human input that prevents semantic black boxes and misaligned designs.
+Record cases where the checkpoint was unnecessary, too late, or missed an important decision. Also record Candidate acceptance cases that were reached too early (half-finished candidate) or too late (expensive closure already performed). The goal is the smallest amount of human input that prevents semantic black boxes and avoids wasting human or model effort.

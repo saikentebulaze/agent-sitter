@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import yaml
+
+from provider_attestation import validate_provider_attestation
+
+
+class ReviewEvidenceError(ValueError):
+    pass
+
+
+def _load_yaml(path: Path, label: str) -> dict:
+    if not path.is_file():
+        raise ReviewEvidenceError(f"{label} is missing: {path}")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        raise ReviewEvidenceError(f"cannot read {label}: {path}: {error}") from error
+    if not isinstance(data, dict):
+        raise ReviewEvidenceError(f"{label} must be a YAML mapping: {path}")
+    return data
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _project_path(project_root: Path, value: object, label: str) -> Path:
+    text = str(value or "").strip()
+    if not text:
+        raise ReviewEvidenceError(f"{label} is required")
+    raw = Path(text)
+    path = raw.resolve() if raw.is_absolute() else (project_root / raw).resolve()
+    try:
+        path.relative_to(project_root)
+    except ValueError as error:
+        raise ReviewEvidenceError(f"{label} escapes the project: {text}") from error
+    return path
+
+
+def _frozen_change_local_path(
+    project_root: Path,
+    change: Path,
+    value: object,
+    label: str,
+) -> Path:
+    """Resolve an immutable request path after the owning Change was archived.
+
+    Review packets deliberately remain byte-for-byte frozen, so their readable
+    diff ref records the historical `changes/active/<id>/...` location. After
+    archive the same artifact moves with the Change. Resolve that historical ref
+    to the corresponding file under the current Change root without rewriting
+    the request or weakening its pre-execution hash proof.
+    """
+
+    path = _project_path(project_root, value, label)
+    if path.exists():
+        return path
+    text = str(value or "").replace("\\", "/").strip()
+    active_prefix = f"changes/active/{change.name}/"
+    if not text.startswith(active_prefix):
+        return path
+    relative = text[len(active_prefix):]
+    candidate = (change / relative).resolve()
+    try:
+        candidate.relative_to(change.resolve())
+    except ValueError as error:
+        raise ReviewEvidenceError(f"{label} escapes the archived Change: {text}") from error
+    return candidate
+
+
+def _request_for_current_round(change: Path, round_number: int) -> tuple[Path, str]:
+    archived = change / "reviews" / f"round-{round_number}.request.yaml"
+    if archived.is_file():
+        return archived, "archived Protocol 2 review request"
+
+    pending = change / "review-request.yaml"
+    if pending.is_file():
+        packet = _load_yaml(pending, "pending Protocol 2 review request")
+        if packet.get("round") == round_number:
+            return pending, "pending Protocol 2 review request"
+    return archived, "archived Protocol 2 review request"
+
+
+def validate_current_protocol2_review(change: Path, data: dict) -> None:
+    """Re-prove the current Protocol-2 review from persisted runtime evidence."""
+
+    review = data.get("review") or {}
+    execution = review.get("execution") or {}
+    protocol = int(execution.get("review_protocol") or 1)
+    if protocol != 2:
+        snapshot = execution.get("input_snapshot") or {}
+        if (
+            data.get("candidate_readiness_protocol") == 1
+            and review.get("status") in {"pass", "warn"}
+            and int(snapshot.get("snapshot_protocol") or 1) == 2
+        ):
+            raise ReviewEvidenceError(
+                "V6.2 snapshot-2 review metadata is missing Review Protocol 2 runtime proof"
+            )
+        return
+
+    round_number = execution.get("round")
+    if not isinstance(round_number, int) or round_number < 1:
+        raise ReviewEvidenceError("Protocol 2 review has an invalid round")
+
+    project_root = change.resolve().parents[2]
+    request_path, request_label = _request_for_current_round(change, round_number)
+    request = _load_yaml(request_path, request_label)
+    if int(request.get("review_protocol") or 1) != 2:
+        raise ReviewEvidenceError("frozen review request is not Protocol 2")
+    if request.get("round") != round_number:
+        raise ReviewEvidenceError("frozen review request round does not match current review")
+    if str(request.get("change_id") or "") != str(data.get("id") or change.name):
+        raise ReviewEvidenceError("frozen review request change_id does not match current Change")
+
+    provider = str(execution.get("provider") or "")
+    request_provider = str((request.get("runtime") or {}).get("provider") or "")
+    if provider != request_provider:
+        raise ReviewEvidenceError("current review Provider differs from the frozen request")
+
+    requested = request.get("requested_profile") or {}
+    requested_role = str(requested.get("role_id") or requested.get("agent") or "")
+    if str(execution.get("agent") or "") != requested_role:
+        raise ReviewEvidenceError("current reviewer role differs from the frozen request")
+
+    runtime_execution = request.get("runtime_execution") or {}
+    for key, execution_key in (
+        ("session_ref", "session_ref"),
+        ("attestation_ref", "attestation_ref"),
+        ("evidence_ref", "runtime_evidence_ref"),
+        ("execution_method", "runtime_method"),
+        ("execution_request_sha256", "execution_request_sha256"),
+    ):
+        if str(runtime_execution.get(key) or "") != str(execution.get(execution_key) or ""):
+            raise ReviewEvidenceError(
+                f"current review {execution_key} differs from the frozen runtime execution"
+            )
+
+    frozen_request = dict(request)
+    frozen_request.pop("runtime_execution", None)
+    expected_request_hash = str(execution.get("execution_request_sha256") or "")
+    if _canonical_sha256(frozen_request) != expected_request_hash:
+        raise ReviewEvidenceError("frozen review request no longer matches the executed request hash")
+
+    production_diff = request.get("production_diff") or {}
+    diff_path = _frozen_change_local_path(
+        project_root,
+        change,
+        production_diff.get("ref"),
+        "review production_diff.ref",
+    )
+    if not diff_path.is_file():
+        raise ReviewEvidenceError(f"frozen review production diff is missing: {diff_path}")
+    if _text_sha256(diff_path.read_text(encoding="utf-8")) != str(
+        production_diff.get("sha256") or ""
+    ):
+        raise ReviewEvidenceError("frozen review production diff no longer matches its hash")
+
+    session_ref = str(execution.get("session_ref") or "")
+    if not session_ref or str(execution.get("evidence_ref") or "") != session_ref:
+        raise ReviewEvidenceError("Protocol 2 review has an invalid session/evidence binding")
+
+    attestation_path = _project_path(
+        project_root, execution.get("attestation_ref"), "review attestation_ref"
+    )
+    evidence_path = _project_path(
+        project_root, execution.get("runtime_evidence_ref"), "review runtime_evidence_ref"
+    )
+    output_path = _project_path(
+        project_root, execution.get("output_ref"), "review output_ref"
+    )
+    if not evidence_path.is_file():
+        raise ReviewEvidenceError(f"review runtime evidence is missing: {evidence_path}")
+    if not output_path.is_file():
+        raise ReviewEvidenceError(f"review output is missing: {output_path}")
+
+    attestation = _load_yaml(attestation_path, "Protocol 2 runtime attestation")
+    attested_execution = attestation.get("execution") or {}
+    if str(attested_execution.get("session_ref") or "") != session_ref:
+        raise ReviewEvidenceError("runtime attestation session does not match current review")
+    if str(attested_execution.get("method") or "") != str(execution.get("runtime_method") or ""):
+        raise ReviewEvidenceError("runtime attestation method does not match current review")
+
+    try:
+        normalized = validate_provider_attestation(request, attestation)
+    except (ValueError, RuntimeError, OSError) as error:
+        raise ReviewEvidenceError(f"Protocol 2 runtime attestation is invalid: {error}") from error
+    if normalized.provider != provider:
+        raise ReviewEvidenceError("normalized runtime Provider does not match current review")
+    if normalized.role_id != requested_role:
+        raise ReviewEvidenceError("normalized runtime role does not match the frozen reviewer")
+    if normalized.raw_evidence_ref and normalized.raw_evidence_ref != session_ref:
+        raise ReviewEvidenceError("normalized runtime session does not match current review")

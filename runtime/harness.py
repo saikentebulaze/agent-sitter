@@ -1,208 +1,155 @@
-"""Provider-era facade for the preserved Harness closure implementation."""
+"""Public Sitter Harness CLI with stable V6.2 command discovery."""
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import sys
 from pathlib import Path
 
-import _harness_impl as _impl
-from _harness_impl import *  # noqa: F401,F403
-from decision_authority import authority_projection, human_decision_digest
-from knowledge_gate import validate_project_knowledge_for_change
-from project_context import ProjectContext
-from review_transaction import record_review as _record_review
+import _harness_v62_impl as _v62
+from _harness_v62_impl import *  # noqa: F401,F403
+from archive_lifecycle import ArchiveLifecycleError, finalize_archive_cleanup
+from change_budget_preflight import (
+    ChangeBudgetPreflightError,
+    validate_change_budget_preflight,
+)
+from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge
+from project_context import resolve_project_context
 
 
-_base_command_review_packet = _impl.command_review_packet
-_base_command_render_knowledge = _impl.command_render_knowledge
-_base_command_promote_knowledge = _impl.command_promote_knowledge
+# Preserve the historical seam used by V6 regression tests and downstream
+# callers that replace the base Knowledge mutation while proving the authority
+# preflight fails first. The wrapper synchronizes the facade value into the
+# implementation module before dispatch, so moving CLI discovery into this thin
+# module does not silently break the old monkeypatch contract.
+_base_command_promote_knowledge = _v62._base_command_promote_knowledge
 
 
-def _assurance_snapshot(change: Path) -> dict[str, str]:
-    data = _impl.load_yaml(change / "change.yaml")
-    risk = data.get("risk") or {}
-    semantic = str(risk.get("semantic") or "").strip().lower()
-    repository = str(risk.get("repository_change") or "").strip().lower()
-    allowed = {"low", "medium", "high", "critical"}
-    if semantic not in allowed or repository not in allowed:
-        raise _impl.ReviewTransactionError("Change risk is invalid before review")
-    return {
-        "semantic": semantic,
-        "repository_change": repository,
-    }
+def command_promote_knowledge(context, change, reviewed_by, evidence):
+    _v62._base_command_promote_knowledge = _base_command_promote_knowledge
+    return _v62.command_promote_knowledge(context, change, reviewed_by, evidence)
 
 
-def _current_authority(change: Path) -> dict:
-    data = _impl.load_yaml(change / "change.yaml")
+_V62_HELP = """
+V6.2 high-level commands:
+  freeze-readiness CHANGE
+      Freeze the Candidate Readiness contract before implementation evidence.
+  record-readiness CHANGE --criterion ID --result pass|fail ...
+      Record snapshot-bound Candidate Readiness evidence.
+  finalize-readiness CHANGE
+      Require all frozen readiness criteria to pass on the current production snapshot.
+  review CHANGE --run [--reviewer maintainer|deep]
+      Run, attest, parse, and record the independent Provider-bound reviewer atomically.
+  prepare-candidate CHANGE [--retain PATH=REASON] [--preexisting PATH=REASON]
+      Finalize readiness/tests, scope-preflight, run independent review, and advance to the human stop.
+  user-review CHANGE --decision approved|changes-requested|not-required --evidence TEXT
+      Record the human Candidate acceptance decision transactionally.
+  record-verification CHANGE --id ID --kind KIND --result pass|partial|fail ...
+      Record authoritative final-verification evidence after human acceptance.
+  defer-knowledge CHANGE --reason TEXT
+      Explicitly defer Knowledge when syncing has no durable Knowledge candidates.
+  finalize-archive-cleanup CHANGE --evidence TEXT
+      Prove Task experiments and temporary production artifacts are cleared before archive.
+  render CHANGE
+      Regenerate deterministic Markdown projections from structured evidence.
+  advance CHANGE
+      Advance exactly one semantically legal lifecycle transition; arbitrary --to jumps are unsupported.
+
+Reference forms:
+  CHANGE accepts a Change ID, Change directory, or change.yaml path.
+  Task-taking Work/Learning commands accept a Task ID, Task directory, or task.yaml path.
+
+Legacy/manual review commands remain available for historical V5/V6 Changes.
+Activated V6.2 Changes should use `review CHANGE --run` or `prepare-candidate CHANGE`.
+""".strip()
+
+
+def _print_combined_help() -> None:
+    output = io.StringIO()
     try:
-        return authority_projection(data)
-    except ValueError as error:
-        raise _impl.ReviewTransactionError(str(error)) from error
+        with contextlib.redirect_stdout(output):
+            _v62._impl.main()
+    except SystemExit as error:
+        if error.code not in {None, 0}:
+            raise
+    base = output.getvalue().rstrip()
+    if base:
+        print(base)
+        print()
+    print(_V62_HELP)
 
 
-def command_review_packet(
-    context: ProjectContext,
-    change: Path,
-    reviewer_name: str,
-    elevated_authorization_ref: str | None,
-) -> None:
-    """Create review input that freezes assurance and explicit user decisions."""
-
-    _base_command_review_packet(
-        context,
-        change,
-        reviewer_name,
-        elevated_authorization_ref,
-    )
-    packet_path = change / "review-request.yaml"
-    packet = _impl.load_yaml(packet_path)
-    authority = _current_authority(change)
-    packet["assurance_snapshot"] = _assurance_snapshot(change)
-    packet["decision_authority"] = authority
-    packet.setdefault("input_snapshot", {})["human_decisions_sha256"] = authority["sha256"]
-    packet["instructions"] = (
-        str(packet.get("instructions") or "")
-        + " Resolved user decisions in decision_authority are authoritative. "
-        "Agent recommendations are advisory only. If Design, implementation diff, "
-        "Verification, or proposed durable Knowledge contradicts a user decision, "
-        "return BLOCK rather than silently reverting to the recommendation."
-    )
-    _impl.write_yaml(packet_path, packet)
+def _run_defer_knowledge(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Explicitly defer zero-candidate Knowledge")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("defer-knowledge")
+    command.add_argument("change")
+    command.add_argument("--reason", required=True)
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        status = defer_knowledge(context, args.change, reason=args.reason)
+        _v62.render_evidence(context, args.change)
+    except (KnowledgeLifecycleError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(f"Knowledge: {status}")
 
 
-def _validate_recorded_authority(change: Path) -> None:
-    data = _impl.load_yaml(change / "change.yaml")
-    authority = _current_authority(change)
-    review = data.get("review") or {}
-    if str(review.get("status") or "pending") == "pending":
+def _run_finalize_archive_cleanup(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Finalize V6.2 archive cleanup")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("finalize-archive-cleanup")
+    command.add_argument("change")
+    command.add_argument("--evidence", required=True)
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        status = finalize_archive_cleanup(context, args.change, evidence=args.evidence)
+        _v62.render_evidence(context, args.change)
+    except (ArchiveLifecycleError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(f"Archive cleanup: {status}")
+
+
+def _preflight_direct_atomic_review(argv: list[str]) -> None:
+    if "review" not in argv or "--run" not in argv:
         return
-    execution = review.get("execution") or {}
-    snapshot = execution.get("input_snapshot") or {}
-    expected = str(snapshot.get("human_decisions_sha256") or "")
-    if authority["status"] == "authoritative" and not expected:
-        raise _impl.ReviewTransactionError(
-            "recorded review has no authoritative human decision snapshot"
-        )
-    if expected and expected != authority["sha256"]:
-        raise _impl.ReviewTransactionError(
-            "recorded review is stale; authoritative human decisions changed"
-        )
+    review_index = argv.index("review")
+    if review_index + 1 >= len(argv):
+        return
+    change = argv[review_index + 1]
+    project = Path.cwd()
+    if "--project" in argv:
+        index = argv.index("--project")
+        if index + 1 >= len(argv):
+            return
+        project = Path(argv[index + 1])
+    try:
+        context = resolve_project_context(project)
+        validate_change_budget_preflight(context, change)
+    except (ChangeBudgetPreflightError, ValueError) as error:
+        raise SystemExit(str(error)) from error
 
 
-def record_review(
-    context: ProjectContext,
-    change: Path,
-    artifact: str | Path,
-    *,
-    architecture: str,
-    scope: str,
-    numerical_evidence: str,
-    evidence_ref: str,
-    remediation_route: str | None = None,
-):
-    packet_path = change / "review-request.yaml"
-    if packet_path.is_file():
-        packet = _impl.load_yaml(packet_path)
-        expected = packet.get("assurance_snapshot")
-        if not isinstance(expected, dict):
-            raise _impl.ReviewTransactionError(
-                "review request has no production assurance snapshot"
-            )
-        actual = _assurance_snapshot(change)
-        normalized = {
-            "semantic": str(expected.get("semantic") or "").strip().lower(),
-            "repository_change": str(
-                expected.get("repository_change") or ""
-            ).strip().lower(),
-        }
-        if normalized != actual:
-            raise _impl.ReviewTransactionError(
-                "review request is stale; production assurance changed after review started"
-            )
-
-        expected_authority = packet.get("decision_authority")
-        current_authority = _current_authority(change)
-        if not isinstance(expected_authority, dict):
-            raise _impl.ReviewTransactionError(
-                "review request has no human decision authority projection"
-            )
-        if str(expected_authority.get("sha256") or "") != current_authority["sha256"]:
-            raise _impl.ReviewTransactionError(
-                "review request is stale; authoritative human decisions changed after review started"
-            )
-    else:
-        _validate_recorded_authority(change)
-
-    return _record_review(
-        context,
-        change,
-        artifact,
-        architecture=architecture,
-        scope=scope,
-        numerical_evidence=numerical_evidence,
-        evidence_ref=evidence_ref,
-        remediation_route=remediation_route,
-    )
-
-
-def command_render_knowledge(context: ProjectContext, change: Path) -> None:
-    _base_command_render_knowledge(context, change)
-    data = _impl.load_yaml(change / "change.yaml")
-    data.setdefault("knowledge_sync", {})["human_decisions_sha256"] = human_decision_digest(data)
-    _impl.write_yaml(change / "change.yaml", data)
-
-
-def command_promote_knowledge(
-    context: ProjectContext,
-    change: Path,
-    reviewed_by: str,
-    evidence: str,
-) -> None:
-    data = _impl.load_yaml(change / "change.yaml")
-    sync = data.get("knowledge_sync") or {}
-    expected = str(sync.get("human_decisions_sha256") or "")
-    authority = _current_authority(change)
-    actual = human_decision_digest(data)
-    if authority["status"] == "authoritative" and not expected:
-        raise _impl.ReviewTransactionError(
-            "knowledge candidate has no authoritative human decision snapshot; render it again"
-        )
-    if expected and expected != actual:
-        raise _impl.ReviewTransactionError(
-            "knowledge candidate is stale; authoritative human decisions changed"
-        )
-    _base_command_promote_knowledge(context, change, reviewed_by, evidence)
-
-
-def command_validate(
-    context: ProjectContext,
-    change: Path,
-    strict_symbols: bool,
-) -> None:
-    _impl.run_change_validator(context, change)
-
-    link_errors = _impl.validate_markdown_links(change, context.project_root)
-    if link_errors:
-        for error in link_errors:
-            print(f"ERROR: {error}", file=sys.stderr)
-        raise SystemExit(1)
-
-    validate_project_knowledge_for_change(context, change)
-
-    warnings = _impl.symbol_warnings(change, context.project_root)
-    for warning in warnings:
-        print(f"WARNING: {warning}")
-    if strict_symbols and warnings:
-        raise SystemExit(2)
-    print("change_consistency: valid")
-
-
-_impl.command_validate = command_validate
-_impl.command_review_packet = command_review_packet
-_impl.record_review = record_review
-_impl.command_render_knowledge = command_render_knowledge
-_impl.command_promote_knowledge = command_promote_knowledge
+def main() -> None:
+    argv = sys.argv[1:]
+    if argv in (["--help"], ["-h"]):
+        _print_combined_help()
+        return
+    if "defer-knowledge" in argv:
+        _run_defer_knowledge(argv)
+        return
+    if "finalize-archive-cleanup" in argv:
+        _run_finalize_archive_cleanup(argv)
+        return
+    _preflight_direct_atomic_review(argv)
+    if not _v62._run_v62_command(argv):
+        _v62._impl.main()
 
 
 if __name__ == "__main__":
-    _impl.main()
+    main()

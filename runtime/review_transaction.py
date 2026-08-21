@@ -1,20 +1,39 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 import yaml
 
 from artifact_consistency import file_sha256, git_diff_sha256
+from change_validation import ChangeValidationError, validate_change_in_process
+from decision_authority import human_decision_digest
+from production_snapshot import production_snapshot_sha256
 from project_context import ProjectContext
 
 
 REVIEW_STATUS = {"pass", "warn", "block"}
 REMEDIATION_ROUTES = {"implementation", "awaiting-production-design"}
 SEVERITY = {"pass": 0, "warn": 1, "block": 2}
+LEGACY_SNAPSHOT_KEYS = (
+    "design_sha256",
+    "tasks_sha256",
+    "diff_sha256",
+    "verification_sha256",
+)
+V2_SNAPSHOT_KEYS = (
+    "production_sha256",
+    "design_sha256",
+    "tasks_sha256",
+    "change_budget_sha256",
+    "human_decisions_sha256",
+    "readiness_contract_sha256",
+    "readiness_evidence_sha256",
+    "test_finalization_sha256",
+)
 
 
 class ReviewTransactionError(ValueError):
@@ -86,19 +105,45 @@ def project_relative(context: ProjectContext, path: Path) -> str:
         raise ReviewTransactionError(f"path is outside project: {path}") from error
 
 
+def _mapping_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def current_snapshot(context: ProjectContext, change: Path) -> dict:
+    data = load_yaml(change / "change.yaml")
+    readiness = data.get("readiness") or {}
+    finalization = change / "test-finalization.yaml"
     return {
         "design_sha256": file_sha256(change / "design.md"),
         "tasks_sha256": file_sha256(change / "tasks.md"),
         "diff_sha256": git_diff_sha256(context.project_root),
         "verification_sha256": file_sha256(change / "verification.md"),
+        "production_sha256": production_snapshot_sha256(context.project_root),
+        "change_budget_sha256": _mapping_sha256(data.get("change_budget") or {}),
+        "human_decisions_sha256": human_decision_digest(data),
+        "readiness_contract_sha256": str(readiness.get("contract_sha256") or ""),
+        "readiness_evidence_sha256": str(readiness.get("evidence_sha256") or ""),
+        "test_finalization_sha256": file_sha256(finalization) if finalization.is_file() else "",
     }
 
 
 def _validate_snapshot(expected: object, actual: dict) -> None:
     if not isinstance(expected, dict):
         raise ReviewTransactionError("review request input_snapshot must be a mapping")
-    changed = [key for key, value in actual.items() if expected.get(key) != value]
+    protocol = int(expected.get("snapshot_protocol") or 1)
+    keys = V2_SNAPSHOT_KEYS if protocol == 2 else LEGACY_SNAPSHOT_KEYS
+    missing = [key for key in keys if not str(expected.get(key) or "").strip()]
+    if missing:
+        raise ReviewTransactionError(
+            "review request input_snapshot is incomplete: " + ", ".join(missing)
+        )
+    changed = [key for key in keys if expected.get(key) != actual.get(key)]
     if changed:
         raise ReviewTransactionError(
             "review request is stale; changed inputs: " + ", ".join(changed)
@@ -123,12 +168,51 @@ def _validate_reviewer(packet: dict) -> dict:
         value = reviewer.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ReviewTransactionError(f"review request reviewer.{key} is required")
-    if packet.get("method") != "native-subagent":
-        raise ReviewTransactionError("review request method must be native-subagent")
-    if reviewer["agent"] == "deep_reviewer" and not packet.get(
-        "elevated_authorization_ref"
+
+    protocol = int(packet.get("review_protocol") or 1)
+    method = str(packet.get("method") or "")
+    if protocol == 1:
+        if method != "native-subagent":
+            raise ReviewTransactionError("review request method must be native-subagent")
+        if reviewer["agent"] == "deep_reviewer" and not packet.get(
+            "elevated_authorization_ref"
+        ):
+            raise ReviewTransactionError("deep review request lacks elevated authorization evidence")
+        return reviewer
+    if protocol != 2:
+        raise ReviewTransactionError(f"unsupported review_protocol: {protocol}")
+    if method != "provider-managed-readonly":
+        raise ReviewTransactionError(
+            "review protocol 2 method must be provider-managed-readonly"
+        )
+    runtime = packet.get("runtime") or {}
+    provider = str(runtime.get("provider") or "")
+    if provider not in {"codex", "claude"}:
+        raise ReviewTransactionError("review protocol 2 requires codex or claude Provider")
+    requested = packet.get("requested_profile") or {}
+    expected_agent = str(requested.get("role_id") or requested.get("agent") or "")
+    expected_model = str(requested.get("model_selector") or requested.get("model") or "")
+    expected_tier = str(requested.get("model_grade") or requested.get("tier") or "")
+    if (
+        reviewer.get("agent") != expected_agent
+        or reviewer.get("model") != expected_model
+        or reviewer.get("tier") != expected_tier
     ):
-        raise ReviewTransactionError("deep review request lacks elevated authorization evidence")
+        raise ReviewTransactionError(
+            "reviewer summary differs from the frozen Provider role profile"
+        )
+    runtime_execution = packet.get("runtime_execution") or {}
+    for key in (
+        "session_ref",
+        "attestation_ref",
+        "evidence_ref",
+        "execution_method",
+        "execution_request_sha256",
+    ):
+        if not str(runtime_execution.get(key) or "").strip():
+            raise ReviewTransactionError(
+                f"review protocol 2 runtime_execution.{key} is required before record"
+            )
     return reviewer
 
 
@@ -164,20 +248,10 @@ def _matches_recorded_review(
 
 
 def _run_validator(context: ProjectContext, change: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(context.package_root / "runtime" / "validate_change.py"),
-            str(change),
-        ],
-        cwd=context.project_root,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-    )
-    if result.returncode:
-        message = result.stderr.strip() or result.stdout.strip() or "change validation failed"
-        raise ReviewTransactionError(message)
+    try:
+        validate_change_in_process(change)
+    except ChangeValidationError as error:
+        raise ReviewTransactionError(str(error)) from error
 
 
 def _archive_request(change: Path, packet: dict) -> None:
@@ -285,7 +359,9 @@ def record_review(
     if output.exists():
         raise ReviewTransactionError(f"review output already exists: {output}")
 
+    protocol = int(packet.get("review_protocol") or 1)
     execution = {
+        "review_protocol": protocol,
         "agent": reviewer["agent"],
         "model": reviewer["model"],
         "tier": reviewer["tier"],
@@ -295,6 +371,20 @@ def record_review(
         "round": round_number,
         "input_snapshot": packet["input_snapshot"],
     }
+    if protocol == 2:
+        runtime_execution = packet.get("runtime_execution") or {}
+        execution.update(
+            {
+                "provider": str((packet.get("runtime") or {}).get("provider") or ""),
+                "runtime_method": runtime_execution["execution_method"],
+                "session_ref": runtime_execution["session_ref"],
+                "attestation_ref": runtime_execution["attestation_ref"],
+                "runtime_evidence_ref": runtime_execution["evidence_ref"],
+                "execution_request_sha256": runtime_execution[
+                    "execution_request_sha256"
+                ],
+            }
+        )
     if packet.get("elevated_authorization_ref"):
         execution["elevated_authorization_ref"] = packet["elevated_authorization_ref"]
 
@@ -310,13 +400,22 @@ def record_review(
         round_data["remediation_route"] = remediation_route
         data["remediation"] = {
             "route": remediation_route,
-            "within_approved_scope": True,
+            "within_approved_scope": remediation_route == "implementation",
         }
         data["status"] = (
             "implementing"
             if remediation_route == "implementation"
             else "designed"
         )
+        if (
+            remediation_route == "implementation"
+            and data.get("candidate_readiness_protocol") == 1
+        ):
+            readiness = data.setdefault("readiness", {})
+            readiness["status"] = "stale"
+            completion = data.setdefault("completion", {})
+            completion["implementation_complete"] = False
+            completion["ready_for_user_review"] = False
     else:
         data["remediation"] = {"route": None, "within_approved_scope": False}
 

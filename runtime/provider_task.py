@@ -76,6 +76,18 @@ def initialize_provider_task(
             }
         )
         atomic_write_yaml(task_path, task)
+
+        # Real newly-created Production Changes use the V6.2 Candidate path.
+        # The asset template remains protocol-neutral so historical/direct
+        # fixtures stay readable; activation happens at the creation
+        # transaction boundary instead of depending on model memory.
+        if entry == "change":
+            assert change_root is not None
+            change_path = change_root / "change.yaml"
+            change = load_yaml(change_path)
+            change["candidate_readiness_protocol"] = 1
+            atomic_write_yaml(change_path, change)
+
         validate_governed_work_graph(context, root)
         register_active_task(context, root)
         return root
