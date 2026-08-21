@@ -14,9 +14,9 @@ for path in (RUNTIME, TESTS):
 
 from _learning_impl import command_observe  # noqa: E402
 from change_lifecycle import record_user_review  # noqa: E402
-from complete_after_approval import complete_after_approval  # noqa: E402
+from complete_after_approval import CompleteAfterApprovalError, complete_after_approval  # noqa: E402
 from governed_work import create_investigation  # noqa: E402
-from test_v62_atomic_review import load_yaml  # noqa: E402
+from test_v62_atomic_review import load_yaml, write_yaml  # noqa: E402
 from test_v63_normal_path import prepare_task_candidate, verification_batch  # noqa: E402
 
 
@@ -112,6 +112,36 @@ class V63ClosureGuardTests(unittest.TestCase):
             self.assertEqual(second["status"], "done")
             self.assertTrue(second["idempotent"])
             self.assertEqual(load_yaml(task / "task.yaml")["status"], "completed")
+
+    def test_governance_only_retry_rejects_redundant_verification_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, context, _, change = prepare_task_candidate(Path(directory))
+            data = load_yaml(change / "change.yaml")
+            data["knowledge_sync"]["entries"] = [{"id": "K01"}]
+            write_yaml(change / "change.yaml", data)
+            record_user_review(
+                context,
+                "chg-v63",
+                decision="approved",
+                evidence="fixture acceptance",
+            )
+            first = complete_after_approval(
+                context,
+                "chg-v63",
+                verification_batch=verification_batch(),
+            )
+            self.assertEqual(first["governance_closure"], "knowledge-review")
+            before = (change / "change.yaml").read_bytes()
+            with self.assertRaisesRegex(
+                CompleteAfterApprovalError,
+                "resume governance-only closure without --verification-batch",
+            ):
+                complete_after_approval(
+                    context,
+                    "chg-v63",
+                    verification_batch=verification_batch(),
+                )
+            self.assertEqual((change / "change.yaml").read_bytes(), before)
 
 
 if __name__ == "__main__":
