@@ -92,6 +92,27 @@ class V63ClosureGuardTests(unittest.TestCase):
                 {"type": "investigation", "ref": investigation_id},
             )
 
+    def test_repeating_completed_closure_is_idempotent_done(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, context, task, _ = prepare_task_candidate(Path(directory))
+            record_user_review(
+                context,
+                "chg-v63",
+                decision="approved",
+                evidence="fixture acceptance",
+            )
+            first = complete_after_approval(
+                context,
+                "chg-v63",
+                verification_batch=verification_batch(),
+            )
+            self.assertEqual(first["status"], "done")
+            self.assertFalse(first["idempotent"])
+            second = complete_after_approval(context, "chg-v63")
+            self.assertEqual(second["status"], "done")
+            self.assertTrue(second["idempotent"])
+            self.assertEqual(load_yaml(task / "task.yaml")["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()
