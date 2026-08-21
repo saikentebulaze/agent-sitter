@@ -194,6 +194,19 @@ def complete_after_approval(
         if not task_id:
             raise CompleteAfterApprovalError("archived Change has no owning Task")
 
+        task_ref = resolve_task_ref(context, task_id)
+        task_data = _load(task_ref.yaml_path)
+        if task_data.get("status") == "completed":
+            return _result(
+                change_id,
+                status="done",
+                engineering_complete=True,
+                governance_closure="complete",
+                archived=True,
+                task_completed=True,
+                idempotent=True,
+            )
+
         learning = _learning_closeout(context, task_id)
         attention = learning.get("user_attention") or {}
         if attention.get("required") is True and attention.get("decision") == "pending":
@@ -228,6 +241,7 @@ def complete_after_approval(
             governance_closure="complete",
             archived=True,
             task_completed=True,
+            idempotent=False,
         )
     except (
         ChangeLifecycleError,
