@@ -29,80 +29,93 @@ HIGH     -> full governance + required independent exploration
 CRITICAL -> full governance + escalation-sensitive controls
 ```
 
-Risk increases are cheap; decreases require resolved unknowns and bounded remaining work. Change -> Investigation raises newly discovered production uncertainty to at least HIGH. Investigation -> Change propagates converged current risk. Lowering current risk never lowers Change assurance. Use `reassess-risk` only when facts change; read `references/risk-classification.md` / `risk-lifecycle.md` only for non-obvious transitions.
+Risk increases are cheap; decreases require resolved unknowns and bounded remaining work. Change -> Investigation raises new production uncertainty to at least HIGH. Investigation -> Change propagates converged current risk. Lowering current risk never lowers Change assurance. Use `reassess-risk` only when facts change; load `references/risk-classification.md` or `risk-lifecycle.md` only for non-obvious transitions.
 
 ## Task / Investigation / Change
 
-Create a Task only after leaving LOW Fast Path. Use Investigation when root cause, responsibility, business/numerical semantics, or expected behavior is not stable. Accepted Decisions remain evidence-backed. Investigation -> Change requires an accepted supported Decision; unexpected behavior during implementation/verification uses Change -> Investigation instead of silently enlarging scope.
+Create a Task only after leaving LOW Fast Path. Use Investigation when root cause, responsibility, business/numerical semantics, or expected behavior is unstable. Investigation -> Change requires an accepted supported Decision. Unexpected implementation/verification behavior uses Change -> Investigation instead of silently enlarging scope.
 
-Common commands: `record-evidence`, `record-claim`, `record-decision`, `pivot-to-change`, `investigate-change`, `conclude-investigation`. Repeated equivalent pivots require new discrimination and may escalate. An open Investigation or escalation blocks risk de-escalation.
+Common commands: `record-evidence`, `record-claim`, `record-decision`, `pivot-to-change`, `investigate-change`, `conclude-investigation`. Repeated equivalent pivots require new discrimination and may escalate. Open Investigation/escalation blocks risk de-escalation.
 
 ## Delegation
 
-LOW work does not use subagents for ceremony. MEDIUM exploration is optional when one or two local reads resolve scope/ownership. HIGH/CRITICAL retains its independent exploration obligation even if cleanup risk later falls.
+LOW work does not use subagents for ceremony. MEDIUM work may stay entirely in the parent when one or two local reads resolve scope/ownership. HIGH/CRITICAL retains its independent exploration obligation even if cleanup risk later falls.
 
 ### Exploration offload economics
 
 Use the expensive parent for synthesis, decisions, edits and verification—not broad retrieval. After at most one or two obvious anchor reads, delegate early when ownership remains unknown, the chain crosses modules/lifecycle stages, or the next parent step would be broad Grep/Read. For HIGH/CRITICAL, satisfy required independent exploration **early** once the question and bounded starting scope are stable.
 
-Choose the cheapest matching role: `source_locator` for exact symbols/callers/tests, `context_scout` for cross-module state/data flow, `test_scout` for test evidence, `framework_scout` only for real framework/ownership semantics. **Default to one Scout, not fan-out**; add another only for `NEED_CONTEXT`, an independent second search line, or evidence conflict. After a Scout completes, do not repeat its broad search in the parent.
+Choose the cheapest matching role: `source_locator` for exact symbols/callers/tests, `context_scout` for cross-module state/data flow, `test_scout` for test evidence, `framework_scout` only for real framework/ownership semantics. **Default to one Scout, not fan-out**; add another only for `NEED_CONTEXT`, an independent search line, or evidence conflict. After a Scout completes, do not repeat its broad search in the parent.
 
-Task-level authorization remains explicit. When policy allows, the parent may authorize a same-tier or cheaper read-only Scout with `--decision optional|required`; stronger-than-parent models still need elevated authorization. Use `delegate_once.py` for request -> Provider runtime -> attestation -> record. A result meant to satisfy a governed Scout/Review gate must be launched through Sitter from the beginning; casually spawned native output is advisory only.
+Task-level authorization remains explicit. When policy allows, authorize a same-tier or cheaper read-only Scout with `--decision optional|required`; stronger-than-parent models still need elevated authorization. Use `delegate_once.py` for request -> Provider runtime -> attestation -> record. Only Sitter-launched output can satisfy governed Scout/Review gates; casual native output is advisory.
 
-Read `references/subagent-model-policy.md` / `reasoning-budget-policy.md` only when delegation/model budgeting is active.
+Load `references/subagent-model-policy.md` / `reasoning-budget-policy.md` only when delegation/model budgeting is active.
 
 ## Human decisions
 
-HIGH/CRITICAL work must identify genuine forks before silently choosing algorithm/product semantics, state ownership, path behavior, coordinates/sign/units, compatibility/fallback policy, responsibility boundaries, acceptance behavior, or accuracy/performance tradeoffs. Batch genuine decisions; do not interrupt for routine implementation details already implied by accepted design. Resolved user decisions are authoritative state.
+HIGH/CRITICAL work must expose genuine forks before silently choosing algorithm/product semantics, state ownership, path behavior, coordinates/sign/units, compatibility/fallback policy, responsibility boundaries, acceptance behavior, or accuracy/performance tradeoffs. Batch real decisions; do not interrupt for routine details already implied by accepted design. Resolved user decisions are authoritative state.
 
 ## Candidate Readiness and closure
 
-New V6.2 Changes use:
+The existing lifecycle remains authoritative:
 
 ```text
 proposed -> designed -> approved -> implementing
 -> candidate-review -> verifying -> syncing -> ready-to-archive -> archived
 ```
 
-Legacy Changes remain read-compatible. For a V6.2 Change, define `readiness.assurance_class` and criteria with Design/Tasks, then freeze them before implementation evidence:
+V6.3 compresses Agent-visible orchestration. Do **not** poll status or stitch together low-level record/finalize/render/advance commands when the high-level transaction owns the sequence.
+
+Define `readiness.assurance_class` and criteria with Design/Tasks, then freeze before implementation evidence:
 
 ```powershell
 python "$Runtime\harness.py" --project $ProjectRoot freeze-readiness <change-id>
 ```
 
-Do not weaken criteria after seeing implementation results. `standard` may use focused deterministic evidence; `behavioral` needs integration/representative external behavior; `numerical` needs representative-case, benchmark, or analytical-check. Unit tests alone cannot make a numerical Change Candidate Ready.
+Never weaken criteria after seeing results. `standard` may use focused deterministic evidence; `behavioral` needs integration/representative external behavior; `numerical` needs representative-case, benchmark, or analytical-check. Unit tests alone cannot make a numerical Change Candidate Ready.
 
-Record current-snapshot evidence and finalize readiness:
+Stage transaction batch files under `changes/active/<change-id>/` so they remain Harness state rather than undeclared project-root production artifacts. Structured values committed to `change.yaml` remain authoritative.
+
+After implementation and required engineering checks actually run, write all Readiness results to one YAML/JSON batch and run:
 
 ```powershell
-python "$Runtime\harness.py" --project $ProjectRoot record-readiness <change-id> `
-  --criterion <id> --result pass|fail `
-  --command-or-entry "..." --evidence "..." [--observed "..."]
-python "$Runtime\harness.py" --project $ProjectRoot finalize-readiness <change-id>
+python "$Runtime\harness.py" --project $ProjectRoot prepare-candidate <change-id> `
+  --readiness-batch <readiness-results.yaml>
 ```
 
-Production/test edits stale that evidence; Harness lifecycle/Markdown writes do not. Prefer `harness.py prepare-candidate <change-id>` once required readiness evidence exists: it finalizes tests, mechanically checks changed production/test paths against an explicit Change Budget before spending Reviewer cost, runs the Provider-bound Reviewer, and advances only on PASS/WARN. If using the lower-level path, run `finalize_tests.py` before `harness.py review <change-id> --run`. Deep review remains exceptional escalation.
+The batch carries real criterion IDs, results, commands/entries, evidence, and optional observations. `prepare-candidate` validates the whole batch before mutation, binds one coherent Production Snapshot, finalizes readiness/test hygiene, checks Change Budget before Reviewer cost, runs the Provider-bound FULL independent Reviewer with runtime attestation, rechecks production after the external Reviewer, records proof, and advances only on PASS/WARN.
 
-A review BLOCK with remediation `implementation` is repaired inside already approved semantics without user interruption. `awaiting-production-design` means new scope/semantics are required and must reach the human checkpoint. Read `references/testing-policy.md`, `review-policy.md`, and `human-in-loop-policy.md` only in these phases.
+A review BLOCK with remediation `implementation` stays inside approved semantics. `awaiting-production-design` means new scope/semantics require the human checkpoint. Deep review is exceptional. Load testing/review/HITL references only when those phases need them. `finalize_tests.py` remains a recovery/compatibility entrypoint, not the normal path.
 
-When Readiness, test finalization and independent review are valid, `harness.py advance <change-id>` enters `candidate-review`. If `user_review.status: pending`, summarize readiness evidence, representative external/numerical results and known limitations, ask the user to approve or request changes, then **STOP**. Do not run final/full regression, Knowledge, Learning closeout, archive, or another reviewer while acceptance is pending.
+On success `prepare-candidate` stops at `candidate-review`. Summarize Readiness, representative external/numerical evidence, and limitations; ask the user to approve or request changes; then **STOP**. While acceptance is pending, do not run final/full regression, Knowledge, Learning closeout, archive, or another Reviewer.
 
-Record the decision only through Harness:
+Record acceptance only through Harness:
 
 ```powershell
 python "$Runtime\harness.py" --project $ProjectRoot user-review <change-id> `
   --decision approved|changes-requested|not-required --evidence "..."
 ```
 
-`not-required` requires explicit user evidence; the Agent may not choose it for convenience. `changes-requested` returns to implementation and stales Readiness. `approved` permits final verification. Broad PASS evidence added after approval need not invalidate the earlier review when production/design/authority/readiness inputs remain unchanged; production or semantic changes do.
+`not-required` needs explicit user evidence; the Agent may not choose it for convenience. `changes-requested` returns to implementation and stales Readiness. `approved` permits Final Verification.
 
-After final verification advances the Change to `syncing`, follow `harness.py status`: if no durable Knowledge candidates exist, use `defer-knowledge --reason "..."`; never fake promotion or silently auto-defer. After Knowledge is promoted/deferred, remove any development experiments/temporary production files and run `finalize-archive-cleanup --evidence "..."`; this transaction checks but never deletes artifacts. Then `advance` may reach `ready-to-archive`, and `archive` records `archived` before Task completion. A historical `change revised after investigation` hold is cleared only after the current post-revision Readiness, Review and final Verification have all been re-proved.
+After approval, actually run required Final Verification, put all results in one YAML/JSON batch, then run:
+
+```powershell
+python "$Runtime\harness.py" --project $ProjectRoot complete-after-approval <change-id> `
+  --verification-batch <final-verification.yaml>
+```
+
+`complete-after-approval` validates the batch before lifecycle mutation, records Final Verification, and stops immediately on engineering failure. On success it continues through authoritative closure transactions: zero durable Knowledge is explicitly deferred; real Knowledge candidates stop for authority; cleanup is checked but never silently deleted; zero/ordinary Learning is assessed automatically; mature durable Learning candidates stop for individual curation; the Task completes only when no active Investigation or non-archived Change remains.
+
+The transaction is resumable. If it returns `governance-closure-pending`, resolve the named blocker and rerun `complete-after-approval <change-id>` without a verification batch. Do not redo valid engineering verification merely because Knowledge, cleanup, Learning, or other Task work remains.
+
+Low-level V6.2 commands (`record-readiness`, `finalize-readiness`, `review --run`, `record-verification`, `defer-knowledge`, `finalize-archive-cleanup`, `render`, `advance`, `archive`) remain recovery/compatibility APIs for historical data, diagnosis, or a transaction that cannot safely continue; they are not the normal success path.
 
 ## Learning and completion
 
-Do not pull LOW Fast Path work into the Work Graph merely for Learning. Governed Tasks retain Learning/completion obligations. Durable candidates still require user review before promotion. Before completion ensure Investigations are concluded, Changes archived/abandoned, required delegations/escalations resolved, temporary artifacts gone, and required Learning closeout satisfied.
+Do not pull LOW work into the Work Graph merely for Learning. Governed Tasks retain Learning/completion obligations. Ordinary observations remain recorded without creating a human stop; mature durable candidates still require user curation. Completion requires Investigations concluded, Changes archived/abandoned, delegations/escalations resolved, temporary artifacts gone, and Learning closeout satisfied.
 
-Useful status commands: `work.py task-status <task-id>`, `work.py validate <task-id>`, `harness.py status <change-id>`, `harness.py validate-change <change-id>`. `harness.py status` is authoritative about `ACTION REQUIRED`, `allowed_next`, and `blocked_next`; it must only recommend commands the runtime actually exposes.
+Use `work.py task-status`, `work.py validate`, `harness.py status`, and `harness.py validate-change` for diagnosis/recovery, not routine polling between successful high-level transactions.
 
 ## Progressive disclosure
 

@@ -46,28 +46,7 @@ def _verification_status(results: list[dict]) -> str:
     return "pass"
 
 
-def record_verification(
-    context: ProjectContext,
-    change_value: str | Path,
-    *,
-    result_id: str,
-    kind: str,
-    result: str,
-    command_or_entry: str,
-    evidence: str,
-    observed: str | None = None,
-    proves: str | None = None,
-    does_not_prove: str | None = None,
-) -> dict:
-    if not result_id.strip() or not kind.strip():
-        raise EvidenceProjectionError("verification id and kind are required")
-    if result not in VERIFICATION_RESULTS:
-        raise EvidenceProjectionError("verification result must be pass, partial, or fail")
-    if not command_or_entry.strip() or not evidence.strip():
-        raise EvidenceProjectionError("verification command/entry and evidence are required")
-
-    ref = resolve_change_ref(context, change_value)
-    data = _load(ref.yaml_path)
+def _validate_verification_state(data: dict) -> None:
     if data.get("candidate_readiness_protocol") != 1:
         raise EvidenceProjectionError(
             "structured record-verification is only available for activated V6.2 Changes"
@@ -84,35 +63,114 @@ def record_verification(
             "user acceptance is required before final verification evidence"
         )
 
-    snapshot = production_snapshot_sha256(context.project_root)
-    entry = {
-        "id": result_id.strip(),
-        "kind": kind.strip(),
-        "command_or_entry": command_or_entry.strip(),
+
+def _normalize_verification_item(item: object, index: int) -> dict:
+    if not isinstance(item, dict):
+        raise EvidenceProjectionError(f"verification batch[{index}] must be a mapping")
+    result_id = str(item.get("id") or item.get("result_id") or "").strip()
+    kind = str(item.get("kind") or "").strip()
+    result = str(item.get("result") or "").strip()
+    command_or_entry = str(item.get("command_or_entry") or "").strip()
+    evidence = str(item.get("evidence") or "").strip()
+    if not result_id or not kind:
+        raise EvidenceProjectionError("verification id and kind are required")
+    if result not in VERIFICATION_RESULTS:
+        raise EvidenceProjectionError("verification result must be pass, partial, or fail")
+    if not command_or_entry or not evidence:
+        raise EvidenceProjectionError("verification command/entry and evidence are required")
+
+    def optional(name: str) -> str | None:
+        value = item.get(name)
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    return {
+        "id": result_id,
+        "kind": kind,
         "result": result,
-        "checked_at": now_iso(),
-        "evidence": evidence.strip(),
-        "observed": observed.strip() if isinstance(observed, str) and observed.strip() else None,
-        "proves": proves.strip() if isinstance(proves, str) and proves.strip() else None,
-        "does_not_prove": (
-            does_not_prove.strip()
-            if isinstance(does_not_prove, str) and does_not_prove.strip()
-            else None
-        ),
-        "production_snapshot_sha256": snapshot,
+        "command_or_entry": command_or_entry,
+        "evidence": evidence,
+        "observed": optional("observed"),
+        "proves": optional("proves"),
+        "does_not_prove": optional("does_not_prove"),
     }
+
+
+def validate_verification_batch(entries: list[dict]) -> list[dict]:
+    if not isinstance(entries, list) or not entries:
+        raise EvidenceProjectionError("verification batch must contain at least one entry")
+    normalized = [_normalize_verification_item(item, index) for index, item in enumerate(entries)]
+    ids = [item["id"] for item in normalized]
+    if len(ids) != len(set(ids)):
+        raise EvidenceProjectionError("verification batch cannot contain duplicate result ids")
+    return normalized
+
+
+def record_verification_batch(
+    context: ProjectContext,
+    change_value: str | Path,
+    entries: list[dict],
+) -> list[dict]:
+    """Atomically record one Final Verification evidence batch."""
+
+    normalized = validate_verification_batch(entries)
+    ref = resolve_change_ref(context, change_value)
+    data = _load(ref.yaml_path)
+    _validate_verification_state(data)
+
+    snapshot = production_snapshot_sha256(context.project_root)
+    checked_at = now_iso()
+    committed = [
+        {
+            **item,
+            "checked_at": checked_at,
+            "production_snapshot_sha256": snapshot,
+        }
+        for item in normalized
+    ]
     verification = data.setdefault("verification", {})
+    replacements = {item["id"]: item for item in committed}
     previous = [
         item
         for item in verification.get("latest_results") or []
-        if str(item.get("id") or "") != result_id.strip()
+        if str(item.get("id") or "") not in replacements
     ]
-    results = [*previous, entry]
+    results = [*previous, *committed]
     verification["latest_results"] = results
     verification["status"] = _verification_status(results)
     atomic_write_yaml(ref.yaml_path, data)
     render_evidence(context, ref.root)
-    return entry
+    return committed
+
+
+def record_verification(
+    context: ProjectContext,
+    change_value: str | Path,
+    *,
+    result_id: str,
+    kind: str,
+    result: str,
+    command_or_entry: str,
+    evidence: str,
+    observed: str | None = None,
+    proves: str | None = None,
+    does_not_prove: str | None = None,
+) -> dict:
+    return record_verification_batch(
+        context,
+        change_value,
+        [
+            {
+                "id": result_id,
+                "kind": kind,
+                "result": result,
+                "command_or_entry": command_or_entry,
+                "evidence": evidence,
+                "observed": observed,
+                "proves": proves,
+                "does_not_prove": does_not_prove,
+            }
+        ],
+    )[0]
 
 
 def _readiness_table(data: dict) -> list[str]:

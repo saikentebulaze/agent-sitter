@@ -1,12 +1,15 @@
-"""Public Sitter Harness CLI with stable V6.2 command discovery."""
+"""Public Sitter Harness CLI with V6.3 normal-path compression."""
 
 from __future__ import annotations
 
 import argparse
 import contextlib
 import io
+import json
 import sys
 from pathlib import Path
+
+import yaml
 
 import _harness_v62_impl as _v62
 from _harness_v62_impl import *  # noqa: F401,F403
@@ -15,15 +18,12 @@ from change_budget_preflight import (
     ChangeBudgetPreflightError,
     validate_change_budget_preflight,
 )
+from complete_after_approval import CompleteAfterApprovalError, complete_after_approval
 from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge
+from prepare_candidate import PrepareCandidateError, prepare_candidate
 from project_context import resolve_project_context
 
 
-# Preserve the historical seam used by V6 regression tests and downstream
-# callers that replace the base Knowledge mutation while proving the authority
-# preflight fails first. The wrapper synchronizes the facade value into the
-# implementation module before dispatch, so moving CLI discovery into this thin
-# module does not silently break the old monkeypatch contract.
 _base_command_promote_knowledge = _v62._base_command_promote_knowledge
 
 
@@ -33,7 +33,13 @@ def command_promote_knowledge(context, change, reviewed_by, evidence):
 
 
 _V62_HELP = """
-V6.2 high-level commands:
+V6.3 normal-path commands:
+  prepare-candidate CHANGE --readiness-batch FILE [--retain PATH=REASON] [--preexisting PATH=REASON]
+      Atomically record Candidate Readiness evidence, finalize tests/scope, run the Provider-bound FULL reviewer, and stop at Candidate Human Review.
+  complete-after-approval CHANGE [--verification-batch FILE]
+      After current Candidate acceptance, record Final Verification as one batch and continue safe closure until a real Knowledge/Learning/cleanup/work-graph stop or completion.
+
+V6.2 compatibility/recovery commands:
   freeze-readiness CHANGE
       Freeze the Candidate Readiness contract before implementation evidence.
   record-readiness CHANGE --criterion ID --result pass|fail ...
@@ -43,11 +49,11 @@ V6.2 high-level commands:
   review CHANGE --run [--reviewer maintainer|deep]
       Run, attest, parse, and record the independent Provider-bound reviewer atomically.
   prepare-candidate CHANGE [--retain PATH=REASON] [--preexisting PATH=REASON]
-      Finalize readiness/tests, scope-preflight, run independent review, and advance to the human stop.
+      Preserve the V6.2 form when readiness evidence was already recorded.
   user-review CHANGE --decision approved|changes-requested|not-required --evidence TEXT
       Record the human Candidate acceptance decision transactionally.
   record-verification CHANGE --id ID --kind KIND --result pass|partial|fail ...
-      Record authoritative final-verification evidence after human acceptance.
+      Record one final-verification result after human acceptance.
   defer-knowledge CHANGE --reason TEXT
       Explicitly defer Knowledge when syncing has no durable Knowledge candidates.
   finalize-archive-cleanup CHANGE --evidence TEXT
@@ -57,12 +63,14 @@ V6.2 high-level commands:
   advance CHANGE
       Advance exactly one semantically legal lifecycle transition; arbitrary --to jumps are unsupported.
 
+Batch FILE format:
+  Either a YAML/JSON list of evidence mappings, or a mapping containing `readiness:` / `verification:` respectively.
+
 Reference forms:
   CHANGE accepts a Change ID, Change directory, or change.yaml path.
   Task-taking Work/Learning commands accept a Task ID, Task directory, or task.yaml path.
 
 Legacy/manual review commands remain available for historical V5/V6 Changes.
-Activated V6.2 Changes should use `review CHANGE --run` or `prepare-candidate CHANGE`.
 """.strip()
 
 
@@ -79,6 +87,76 @@ def _print_combined_help() -> None:
         print(base)
         print()
     print(_V62_HELP)
+
+
+def _batch_file(context, value: Path, key: str) -> list[dict]:
+    path = value if value.is_absolute() else context.project_root / value
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        raise ValueError(f"cannot read {key} batch {path}: {error}") from error
+    if isinstance(payload, dict):
+        payload = payload.get(key)
+    if not isinstance(payload, list) or not payload:
+        raise ValueError(f"{key} batch must be a non-empty list")
+    if not all(isinstance(item, dict) for item in payload):
+        raise ValueError(f"{key} batch entries must be mappings")
+    return payload
+
+
+def _run_prepare_candidate_batch(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Prepare one V6.3 Candidate")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("prepare-candidate")
+    command.add_argument("change")
+    command.add_argument("--readiness-batch", type=Path, required=True)
+    command.add_argument("--retain", action="append", default=[])
+    command.add_argument("--preexisting", action="append", default=[])
+    command.add_argument("--reviewer", choices=("maintainer", "deep"), default="maintainer")
+    command.add_argument("--elevated-authorization-ref")
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    role = "deep_reviewer" if args.reviewer == "deep" else "maintainer_reviewer"
+    try:
+        result = prepare_candidate(
+            context,
+            args.change,
+            readiness_batch=_batch_file(context, args.readiness_batch, "readiness"),
+            retained=args.retain,
+            preexisting=args.preexisting,
+            role=role,
+            elevated_authorization_ref=args.elevated_authorization_ref,
+        )
+        _v62.render_evidence(context, args.change)
+    except (PrepareCandidateError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def _run_complete_after_approval(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Complete an accepted V6.3 Candidate")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("complete-after-approval")
+    command.add_argument("change")
+    command.add_argument("--verification-batch", type=Path)
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        batch = (
+            _batch_file(context, args.verification_batch, "verification")
+            if args.verification_batch is not None
+            else None
+        )
+        result = complete_after_approval(
+            context,
+            args.change,
+            verification_batch=batch,
+        )
+    except (CompleteAfterApprovalError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def _run_defer_knowledge(argv: list[str]) -> None:
@@ -139,6 +217,12 @@ def main() -> None:
     argv = sys.argv[1:]
     if argv in (["--help"], ["-h"]):
         _print_combined_help()
+        return
+    if "prepare-candidate" in argv and "--readiness-batch" in argv:
+        _run_prepare_candidate_batch(argv)
+        return
+    if "complete-after-approval" in argv:
+        _run_complete_after_approval(argv)
         return
     if "defer-knowledge" in argv:
         _run_defer_knowledge(argv)
