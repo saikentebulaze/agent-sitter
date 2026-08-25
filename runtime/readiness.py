@@ -146,6 +146,89 @@ def freeze_readiness_contract(context: ProjectContext, change_value: str | Path)
     return digest
 
 
+def _normalize_batch_item(item: object, index: int, criteria: dict[str, dict]) -> dict:
+    if not isinstance(item, dict):
+        raise ReadinessError(f"readiness batch[{index}] must be a mapping")
+    criterion_id = str(item.get("criterion_id") or item.get("criterion") or "").strip()
+    result = str(item.get("result") or "").strip()
+    command_or_entry = str(item.get("command_or_entry") or "").strip()
+    evidence = str(item.get("evidence") or "").strip()
+    if not criterion_id:
+        raise ReadinessError(f"readiness batch[{index}].criterion_id is required")
+    if criterion_id not in criteria:
+        raise ReadinessError(f"unknown readiness criterion: {criterion_id}")
+    if result not in RESULTS:
+        raise ReadinessError("readiness result must be pass or fail")
+    if not command_or_entry or not evidence:
+        raise ReadinessError("command_or_entry and evidence are required")
+    observed = item.get("observed")
+    return {
+        "criterion_id": criterion_id,
+        "result": result,
+        "command_or_entry": command_or_entry,
+        "evidence": evidence,
+        "observed": observed.strip() if isinstance(observed, str) and observed.strip() else None,
+    }
+
+
+def record_readiness_batch(
+    context: ProjectContext,
+    change_value: str | Path,
+    entries: list[dict],
+) -> list[dict]:
+    """Atomically record one Candidate Readiness evidence batch.
+
+    The entire batch is parsed and validated before the Change is mutated. All
+    entries are bound to one Production Snapshot so a successful batch is a
+    coherent evidence commit rather than a sequence of partially visible writes.
+    """
+
+    if not isinstance(entries, list) or not entries:
+        raise ReadinessError("readiness batch must contain at least one entry")
+    ref = resolve_change_ref(context, change_value)
+    data = _load(ref.yaml_path)
+    validate_readiness_contract(data)
+    if data.get("candidate_readiness_protocol") != 1:
+        raise ReadinessError("Change does not use candidate_readiness_protocol 1")
+    _require_frozen_contract(data)
+    readiness = data["readiness"]
+    criteria = {str(item["id"]): item for item in readiness["criteria"]}
+
+    normalized = [_normalize_batch_item(item, index, criteria) for index, item in enumerate(entries)]
+    ids = [item["criterion_id"] for item in normalized]
+    if len(ids) != len(set(ids)):
+        raise ReadinessError("readiness batch cannot contain duplicate criterion ids")
+
+    snapshot = production_snapshot_sha256(context.project_root)
+    checked_at = now_iso()
+    committed = [
+        {
+            **item,
+            "checked_at": checked_at,
+            "production_snapshot_sha256": snapshot,
+        }
+        for item in normalized
+    ]
+    replacements = {item["criterion_id"]: item for item in committed}
+    previous = [
+        item
+        for item in readiness.get("latest_results") or []
+        if str(item.get("criterion_id") or "") not in replacements
+    ]
+    latest = [*previous, *committed]
+    readiness["latest_results"] = latest
+    readiness["status"] = "fail" if any(item.get("result") == "fail" for item in latest) else "pending"
+    readiness["evidence_sha256"] = readiness_evidence_digest(data)
+    readiness["production_snapshot"] = {"sha256": snapshot, "captured_at": checked_at}
+    readiness["achieved_at"] = None
+    completion = data.setdefault("completion", {})
+    completion["implementation_complete"] = False
+    completion["ready_for_user_review"] = False
+    validate_readiness_contract(data)
+    atomic_write_yaml(ref.yaml_path, data)
+    return committed
+
+
 def record_readiness(
     context: ProjectContext,
     change_value: str | Path,
@@ -156,43 +239,19 @@ def record_readiness(
     evidence: str,
     observed: str | None = None,
 ) -> None:
-    if result not in RESULTS:
-        raise ReadinessError("readiness result must be pass or fail")
-    if not command_or_entry.strip() or not evidence.strip():
-        raise ReadinessError("command_or_entry and evidence are required")
-    ref = resolve_change_ref(context, change_value)
-    data = _load(ref.yaml_path)
-    validate_readiness_contract(data)
-    if data.get("candidate_readiness_protocol") != 1:
-        raise ReadinessError("Change does not use candidate_readiness_protocol 1")
-    _require_frozen_contract(data)
-    readiness = data["readiness"]
-    criteria = {str(item["id"]): item for item in readiness["criteria"]}
-    if criterion_id not in criteria:
-        raise ReadinessError(f"unknown readiness criterion: {criterion_id}")
-    snapshot = production_snapshot_sha256(context.project_root)
-    entry = {
-        "criterion_id": criterion_id,
-        "result": result,
-        "command_or_entry": command_or_entry.strip(),
-        "observed": observed.strip() if isinstance(observed, str) and observed.strip() else None,
-        "checked_at": now_iso(),
-        "evidence": evidence.strip(),
-        "production_snapshot_sha256": snapshot,
-    }
-    previous = [
-        item for item in readiness.get("latest_results") or []
-        if str(item.get("criterion_id") or "") != criterion_id
-    ]
-    readiness["latest_results"] = [*previous, entry]
-    readiness["status"] = "pending" if result == "pass" else "fail"
-    readiness["evidence_sha256"] = readiness_evidence_digest(data)
-    readiness["production_snapshot"] = {"sha256": snapshot, "captured_at": now_iso()}
-    readiness["achieved_at"] = None
-    completion = data.setdefault("completion", {})
-    completion["implementation_complete"] = False
-    completion["ready_for_user_review"] = False
-    atomic_write_yaml(ref.yaml_path, data)
+    record_readiness_batch(
+        context,
+        change_value,
+        [
+            {
+                "criterion_id": criterion_id,
+                "result": result,
+                "command_or_entry": command_or_entry,
+                "evidence": evidence,
+                "observed": observed,
+            }
+        ],
+    )
 
 
 def finalize_readiness(context: ProjectContext, change_value: str | Path) -> dict:

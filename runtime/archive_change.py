@@ -2,35 +2,35 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import yaml
 
-from project_context import resolve_project_context
+from change_validation import ChangeValidationError, validate_change_in_process
+from project_context import ProjectContext, resolve_project_context
+from reference_resolver import resolve_change_ref
 from review_transaction import atomic_write_text, atomic_write_yaml
+
+
+class ArchiveChangeError(ValueError):
+    pass
 
 
 def _load(path: Path) -> dict:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as error:
-        raise SystemExit(f"cannot read {path}: {error}") from error
+        raise ArchiveChangeError(f"cannot read {path}: {error}") from error
     if not isinstance(data, dict):
-        raise SystemExit(f"expected YAML mapping: {path}")
+        raise ArchiveChangeError(f"expected YAML mapping: {path}")
     return data
 
 
-def _validate(context, source: Path) -> None:
-    cmd = [
-        sys.executable,
-        str(context.package_root / "runtime" / "validate_change.py"),
-        str(source),
-    ]
-    result = subprocess.run(cmd, cwd=context.project_root)
-    if result.returncode:
-        raise SystemExit(result.returncode)
+def _validate(source: Path) -> None:
+    try:
+        validate_change_in_process(source)
+    except ChangeValidationError as error:
+        raise ArchiveChangeError(str(error)) from error
 
 
 def _rebase_ref(value: object, active_prefix: str, archive_prefix: str) -> object:
@@ -74,36 +74,33 @@ def _rebase_change_local_refs(data: dict, change_id: str) -> None:
         knowledge[key] = _rebase_ref(knowledge.get(key), active_prefix, archive_prefix)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("change", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--project", type=Path, default=Path.cwd())
-    args = parser.parse_args()
-    try:
-        context = resolve_project_context(args.project)
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
+def archive_change(
+    context: ProjectContext,
+    change_value: str | Path,
+    *,
+    dry_run: bool = False,
+) -> Path:
+    """Archive one ready Change without spawning another Harness process."""
 
-    source = args.change.resolve()
+    ref = resolve_change_ref(context, change_value)
+    source = ref.root.resolve()
     active_root = (context.project_root / "changes/active").resolve()
     if source.parent != active_root:
-        raise SystemExit("change must be a direct child of changes/active")
+        raise ArchiveChangeError("change must be a direct child of changes/active")
     if not source.is_dir():
-        raise SystemExit(f"change directory not found: {source}")
+        raise ArchiveChangeError(f"change directory not found: {source}")
 
     change_yaml = source / "change.yaml"
     data = _load(change_yaml)
     if str(data.get("status") or "") != "ready-to-archive":
-        raise SystemExit("Change must be ready-to-archive before archive transaction")
+        raise ArchiveChangeError("Change must be ready-to-archive before archive transaction")
 
-    _validate(context, source)
+    _validate(source)
     target = context.project_root / "changes/archive" / source.name
     if target.exists():
-        raise SystemExit(f"archive target exists: {target}")
-    print(f"{source} -> {target}")
-    if args.dry_run:
-        return
+        raise ArchiveChangeError(f"archive target exists: {target}")
+    if dry_run:
+        return target
 
     original = change_yaml.read_text(encoding="utf-8")
     data["status"] = "archived"
@@ -114,7 +111,7 @@ def main() -> None:
         atomic_write_yaml(target / "change.yaml", data)
         # Archived state must itself validate at its final location. This catches
         # stale active-path refs before the archive transaction can report success.
-        _validate(context, target)
+        _validate(target)
     except BaseException:
         if target.exists() and not source.exists():
             source.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +119,24 @@ def main() -> None:
         if source.exists():
             atomic_write_text(source / "change.yaml", original)
         raise
-    print("archived")
+    return target
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("change", type=Path)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    args = parser.parse_args()
+    try:
+        context = resolve_project_context(args.project)
+        target = archive_change(context, args.change, dry_run=args.dry_run)
+    except (ArchiveChangeError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    source = args.change.resolve()
+    print(f"{source} -> {target}")
+    if not args.dry_run:
+        print("archived")
 
 
 if __name__ == "__main__":
