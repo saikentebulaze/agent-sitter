@@ -22,7 +22,7 @@ from readiness import (  # noqa: E402
     freeze_readiness_contract,
     record_readiness,
 )
-from review_runner import run_atomic_review  # noqa: E402
+from review_runner import AtomicReviewError, run_atomic_review  # noqa: E402
 
 
 def git(project: Path, *args: str) -> None:
@@ -224,6 +224,14 @@ def validate_change(project: Path, change: Path) -> subprocess.CompletedProcess[
     )
 
 
+def only_review_attempt(project: Path) -> Path:
+    root = project / ".agent-work/task-one/review-staging"
+    attempts = sorted(path for path in root.iterdir() if path.is_dir())
+    if len(attempts) != 1:
+        raise AssertionError(f"expected one review attempt, found {attempts}")
+    return attempts[0]
+
+
 class AtomicReviewTests(unittest.TestCase):
     def test_pass_review_records_protocol2_and_can_reach_candidate_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -249,6 +257,14 @@ class AtomicReviewTests(unittest.TestCase):
             self.assertEqual(execution["runtime_method"], "app-server-isolated-agent")
             self.assertFalse((change / "review-request.yaml").exists())
             self.assertTrue((change / "reviews" / "round-1.request.yaml").is_file())
+            attempt = only_review_attempt(project)
+            attempt_data = load_yaml(attempt / "attempt.yaml")
+            self.assertEqual(attempt_data["status"], "recorded")
+            self.assertTrue(attempt_data["counts_as_review_round"])
+            self.assertTrue((attempt / "request.yaml").is_file())
+            self.assertTrue((attempt / "reviewer-output.md").is_file())
+            self.assertTrue((attempt / "attestation.yaml").is_file())
+            self.assertTrue((attempt / "runtime-evidence.yaml").is_file())
 
             validated = validate_change(project, change)
             self.assertEqual(validated.returncode, 0, validated.stderr)
@@ -286,6 +302,73 @@ class AtomicReviewTests(unittest.TestCase):
             rejected = validate_change(project, change)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("session", rejected.stderr.lower())
+
+    def test_invalid_block_verdict_preserves_provider_attempt_without_recording_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            change = prepare_change(project, context)
+            with self.assertRaisesRegex(
+                AtomicReviewError,
+                "requires remediation_route.*reviewer attempt evidence",
+            ):
+                run_atomic_review(
+                    context,
+                    "chg-one",
+                    role_runner=fake_role_runner(
+                        "  architecture: block\n"
+                        "  scope: pass\n"
+                        "  numerical_evidence: pass\n"
+                        "  remediation_route: null\n"
+                    ),
+                )
+
+            data = load_yaml(change / "change.yaml")
+            self.assertEqual(data.get("review_history") or [], [])
+            self.assertNotEqual((data.get("review") or {}).get("status"), "block")
+            self.assertFalse((change / "review-request.yaml").exists())
+            self.assertFalse((change / "reviews/round-1.md").exists())
+
+            attempt = only_review_attempt(project)
+            attempt_data = load_yaml(attempt / "attempt.yaml")
+            self.assertEqual(attempt_data["status"], "protocol-failure")
+            self.assertFalse(attempt_data["counts_as_review_round"])
+            self.assertIn("remediation_route", attempt_data["error"])
+            raw = (attempt / "reviewer-output.md").read_text(encoding="utf-8")
+            self.assertIn("architecture: block", raw)
+            self.assertIn("remediation_route: null", raw)
+            self.assertTrue((attempt / "request.yaml").is_file())
+            self.assertTrue((attempt / "attestation.yaml").is_file())
+            self.assertTrue((attempt / "runtime-evidence.yaml").is_file())
+
+    def test_malformed_verdict_yaml_preserves_provider_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, context = make_project(Path(directory))
+            change = prepare_change(project, context)
+            with self.assertRaisesRegex(
+                AtomicReviewError,
+                "invalid sitter_review YAML.*reviewer attempt evidence",
+            ):
+                run_atomic_review(
+                    context,
+                    "chg-one",
+                    role_runner=fake_role_runner(
+                        "  architecture: [pass\n"
+                        "  scope: pass\n"
+                        "  numerical_evidence: pass\n"
+                        "  remediation_route: null\n"
+                    ),
+                )
+
+            data = load_yaml(change / "change.yaml")
+            self.assertEqual(data.get("review_history") or [], [])
+            attempt = only_review_attempt(project)
+            attempt_data = load_yaml(attempt / "attempt.yaml")
+            self.assertEqual(attempt_data["status"], "protocol-failure")
+            self.assertFalse(attempt_data["counts_as_review_round"])
+            self.assertIn("invalid sitter_review YAML", attempt_data["error"])
+            self.assertTrue((attempt / "reviewer-output.md").is_file())
+            self.assertTrue((attempt / "attestation.yaml").is_file())
+            self.assertTrue((attempt / "runtime-evidence.yaml").is_file())
 
     def test_implementation_block_returns_to_implementation_and_stales_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
