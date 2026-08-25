@@ -167,6 +167,61 @@ class PrepareCandidateTests(unittest.TestCase):
                 )
             self.assertEqual(calls, [])
 
+    def test_test_hygiene_failure_preserves_valid_readiness_for_resumable_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, change, context = setup_fixture(
+                Path(directory),
+                add_unclassified_test=True,
+            )
+            calls: list[int] = []
+            with self.assertRaisesRegex(
+                PrepareCandidateError,
+                "changed test is unclassified",
+            ):
+                prepare_candidate(
+                    context,
+                    "chg",
+                    role_runner=pass_runner(calls),
+                )
+            self.assertEqual(calls, [])
+
+            after_failure = yaml.safe_load(
+                (change / "change.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(after_failure["status"], "implementing")
+            self.assertEqual(after_failure["readiness"]["status"], "pass")
+            self.assertTrue(after_failure["completion"]["implementation_complete"])
+            self.assertFalse(after_failure["completion"]["ready_for_user_review"])
+            self.assertFalse(after_failure["methodology"]["test_cleanup_complete"])
+            self.assertEqual(after_failure.get("review_history") or [], [])
+            evidence_sha = after_failure["readiness"]["evidence_sha256"]
+            production_sha = after_failure["readiness"]["production_snapshot"]["sha256"]
+            latest_results = after_failure["readiness"]["latest_results"]
+
+            result = prepare_candidate(
+                context,
+                "chg",
+                retained=[
+                    "tests/test_new_behavior.py=permanent regression for the changed behavior"
+                ],
+                role_runner=pass_runner(calls),
+            )
+            self.assertEqual(calls, [1])
+            self.assertEqual(result["status"], "candidate-review")
+
+            after_retry = yaml.safe_load(
+                (change / "change.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(after_retry["readiness"]["evidence_sha256"], evidence_sha)
+            self.assertEqual(
+                after_retry["readiness"]["production_snapshot"]["sha256"],
+                production_sha,
+            )
+            self.assertEqual(after_retry["readiness"]["latest_results"], latest_results)
+            self.assertTrue(after_retry["methodology"]["test_cleanup_complete"])
+            self.assertEqual(len(after_retry["review_history"]), 1)
+            self.assertEqual(after_retry["status"], "candidate-review")
+
     def test_ready_change_reaches_candidate_review_in_one_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, change, context = setup_fixture(
