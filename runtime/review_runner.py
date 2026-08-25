@@ -260,7 +260,7 @@ def _write_review_attempt(
         "change_id": packet.get("change_id"),
         "round": packet.get("round"),
         "status": status,
-        "counts_as_review_round": status == "recorded",
+        "counts_as_review_round": False,
         "provider": run.provider,
         "role": run.role_id,
         "session_ref": run.session_ref,
@@ -335,14 +335,6 @@ def run_atomic_review(
         atomic_write_yaml(attestation_path, run.attestation)
         atomic_write_yaml(evidence_path, run.evidence)
         evidence_persisted = True
-        _write_review_attempt(
-            context,
-            packet=packet,
-            run=run,
-            staging=staging,
-            execution_request_sha256=execution_request_sha256,
-            status="provider-returned",
-        )
 
         _validate_frozen_production_input(context, packet)
         verdict = parse_review_verdict(run.output)
@@ -373,14 +365,6 @@ def run_atomic_review(
             numerical_evidence=str(verdict["numerical_evidence"]),
             evidence_ref=run.session_ref,
             remediation_route=verdict["remediation_route"],
-        )
-        _write_review_attempt(
-            context,
-            packet=packet,
-            run=run,
-            staging=staging,
-            execution_request_sha256=execution_request_sha256,
-            status="recorded",
         )
     except (
         ProviderRoleRunnerError,
