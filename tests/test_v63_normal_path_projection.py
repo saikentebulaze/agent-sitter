@@ -29,6 +29,7 @@ class V63NormalPathProjectionTests(unittest.TestCase):
         text = GOVERNOR.read_text(encoding="utf-8")
         self.assertLess(len(text.encode("utf-8")), 10000)
         for marker in (
+            "begin-implementation",
             "prepare-candidate",
             "--readiness-batch",
             "candidate-review",
@@ -72,6 +73,7 @@ class V63NormalPathProjectionTests(unittest.TestCase):
             mirror = project / MIRROR_REF
             self.assertTrue(mirror.is_file())
             mirror_text = mirror.read_text(encoding="utf-8")
+            self.assertIn("begin-implementation", mirror_text)
             self.assertIn("prepare-candidate", mirror_text)
             self.assertIn("--readiness-batch", mirror_text)
             self.assertIn("complete-after-approval", mirror_text)
@@ -99,8 +101,13 @@ class V63NormalPathProjectionTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("V6.3 normal-path commands", result.stdout)
+        self.assertIn("begin-implementation CHANGE", result.stdout)
         self.assertIn("prepare-candidate CHANGE --readiness-batch FILE", result.stdout)
         self.assertIn("complete-after-approval CHANGE", result.stdout)
+        self.assertLess(
+            result.stdout.index("begin-implementation CHANGE"),
+            result.stdout.index("prepare-candidate CHANGE --readiness-batch FILE"),
+        )
         self.assertIn("V6.2 compatibility/recovery commands", result.stdout)
 
 
