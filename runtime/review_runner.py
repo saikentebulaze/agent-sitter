@@ -107,6 +107,7 @@ sitter_review:
   remediation_route: implementation|awaiting-production-design|null
 ```
 Use `implementation` only when a BLOCK is deterministically repairable inside already approved semantics/scope. Use `awaiting-production-design` when a new semantic, scope, acceptance, or authoritative user decision is required.
+If ANY of architecture, scope, or numerical_evidence is `block`, remediation_route MUST be exactly `implementation` or `awaiting-production-design`; it MUST NOT be null. If none is `block`, remediation_route MUST be null.
 """
 
 
@@ -244,6 +245,36 @@ def _validate_frozen_production_input(
         raise AtomicReviewError("production/test state changed during reviewer execution")
 
 
+def _write_review_attempt(
+    context: ProjectContext,
+    *,
+    packet: dict,
+    run: RoleRunResult,
+    staging: Path,
+    execution_request_sha256: str,
+    status: str,
+    error: str | None = None,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "change_id": packet.get("change_id"),
+        "round": packet.get("round"),
+        "status": status,
+        "counts_as_review_round": status == "recorded",
+        "provider": run.provider,
+        "role": run.role_id,
+        "session_ref": run.session_ref,
+        "execution_request_sha256": execution_request_sha256,
+        "request_ref": project_relative(context, staging / "request.yaml"),
+        "output_ref": project_relative(context, staging / "reviewer-output.md"),
+        "attestation_ref": project_relative(context, staging / "attestation.yaml"),
+        "runtime_evidence_ref": project_relative(context, staging / "runtime-evidence.yaml"),
+    }
+    if error:
+        payload["error"] = error
+    atomic_write_yaml(staging / "attempt.yaml", payload)
+
+
 def run_atomic_review(
     context: ProjectContext,
     change_value: str | Path,
@@ -278,10 +309,13 @@ def run_atomic_review(
         / "review-staging"
         / f"{change.name}-round-{packet['round']}-{attempt}"
     )
+    request_copy_path = staging / "request.yaml"
     output_path = staging / "reviewer-output.md"
     attestation_path = staging / "attestation.yaml"
     evidence_path = staging / "runtime-evidence.yaml"
     execution_request_sha256 = _canonical_sha256(packet)
+    run: RoleRunResult | None = None
+    evidence_persisted = False
     try:
         if role_runner is None:
             run = run_readonly_packet(
@@ -292,11 +326,26 @@ def run_atomic_review(
             )
         else:
             run = role_runner(context, packet, packet["instructions"])
-        _validate_frozen_production_input(context, packet)
-        verdict = parse_review_verdict(run.output)
+
+        # Provider execution is an immutable fact even when the returned verdict
+        # is malformed or later post-execution validation fails. Preserve the
+        # frozen request and raw runtime evidence before interpreting the output.
+        atomic_write_yaml(request_copy_path, packet)
         atomic_write_text(output_path, run.output)
         atomic_write_yaml(attestation_path, run.attestation)
         atomic_write_yaml(evidence_path, run.evidence)
+        evidence_persisted = True
+        _write_review_attempt(
+            context,
+            packet=packet,
+            run=run,
+            staging=staging,
+            execution_request_sha256=execution_request_sha256,
+            status="provider-returned",
+        )
+
+        _validate_frozen_production_input(context, packet)
+        verdict = parse_review_verdict(run.output)
 
         current_packet = _load(request_path)
         if _canonical_sha256(current_packet) != execution_request_sha256:
@@ -325,6 +374,14 @@ def run_atomic_review(
             evidence_ref=run.session_ref,
             remediation_route=verdict["remediation_route"],
         )
+        _write_review_attempt(
+            context,
+            packet=packet,
+            run=run,
+            staging=staging,
+            execution_request_sha256=execution_request_sha256,
+            status="recorded",
+        )
     except (
         ProviderRoleRunnerError,
         ReviewVerdictError,
@@ -333,8 +390,28 @@ def run_atomic_review(
         ValueError,
         OSError,
     ) as error:
-        request_path.unlink(missing_ok=True)
-        raise AtomicReviewError(str(error)) from error
+        attempt_ref = None
+        try:
+            if run is not None and evidence_persisted:
+                status = (
+                    "protocol-failure"
+                    if isinstance(error, ReviewVerdictError)
+                    else "post-execution-failure"
+                )
+                _write_review_attempt(
+                    context,
+                    packet=packet,
+                    run=run,
+                    staging=staging,
+                    execution_request_sha256=execution_request_sha256,
+                    status=status,
+                    error=str(error),
+                )
+                attempt_ref = project_relative(context, staging)
+        finally:
+            request_path.unlink(missing_ok=True)
+        suffix = f"; reviewer attempt evidence: {attempt_ref}" if attempt_ref else ""
+        raise AtomicReviewError(f"{error}{suffix}") from error
 
     return {
         "change": data.get("id") or change.name,
