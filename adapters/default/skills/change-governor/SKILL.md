@@ -64,13 +64,15 @@ proposed -> designed -> approved -> implementing
 -> candidate-review -> verifying -> syncing -> ready-to-archive -> archived
 ```
 
-V6.3 compresses Agent-visible orchestration. Do **not** poll status or stitch together low-level record/finalize/render/advance commands when the high-level transaction owns the sequence.
+V6.3 compresses Agent-visible orchestration. Do **not** poll status, hand-edit lifecycle state, or stitch together low-level record/finalize/render/advance commands when a high-level transaction owns the sequence.
 
-Define `readiness.assurance_class` and criteria with Design/Tasks, then freeze before implementation evidence:
+Before production edits, finish Design/Tasks, define an explicit Change Budget, resolve or explicitly rule out material Human Decisions, and define `readiness.assurance_class` plus criteria. Then enter implementation through the formal transaction:
 
 ```powershell
-python "$Runtime\harness.py" --project $ProjectRoot freeze-readiness <change-id>
+python "$Runtime\harness.py" --project $ProjectRoot begin-implementation <change-id>
 ```
+
+`begin-implementation` owns the pre-implementation planning transitions, freezes the Readiness Contract immediately before implementation, and ends at `implementing`. For HIGH/CRITICAL repository changes it fails closed until explicit human approval exists; only after that approval may the caller use `--approved-by <identity>`. Never invent approval provenance. `freeze-readiness` remains recovery/compatibility, not the V6.3 normal path.
 
 Never weaken criteria after seeing results. `standard` may use focused deterministic evidence; `behavioral` needs integration/representative external behavior; `numerical` needs representative-case, benchmark, or analytical-check. Unit tests alone cannot make a numerical Change Candidate Ready.
 
@@ -109,7 +111,7 @@ python "$Runtime\harness.py" --project $ProjectRoot complete-after-approval <cha
 
 The transaction is resumable. If it returns `governance-closure-pending`, resolve the named blocker and rerun `complete-after-approval <change-id>` without a verification batch. Do not redo valid engineering verification merely because Knowledge, cleanup, Learning, or other Task work remains.
 
-Low-level V6.2 commands (`record-readiness`, `finalize-readiness`, `review --run`, `record-verification`, `defer-knowledge`, `finalize-archive-cleanup`, `render`, `advance`, `archive`) remain recovery/compatibility APIs for historical data, diagnosis, or a transaction that cannot safely continue; they are not the normal success path.
+Low-level V6.2 commands (`freeze-readiness`, `record-readiness`, `finalize-readiness`, `review --run`, `record-verification`, `defer-knowledge`, `finalize-archive-cleanup`, `render`, `advance`, `archive`) remain recovery/compatibility APIs for historical data, diagnosis, or a transaction that cannot safely continue; they are not the normal success path.
 
 ## Learning and completion
 
