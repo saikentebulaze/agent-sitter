@@ -19,6 +19,7 @@ from change_budget_preflight import (
     validate_change_budget_preflight,
 )
 from complete_after_approval import CompleteAfterApprovalError, complete_after_approval
+from implementation_entry import ImplementationEntryError, begin_implementation
 from knowledge_lifecycle import KnowledgeLifecycleError, defer_knowledge
 from prepare_candidate import PrepareCandidateError, prepare_candidate
 from project_context import resolve_project_context
@@ -34,6 +35,8 @@ def command_promote_knowledge(context, change, reviewed_by, evidence):
 
 _V62_HELP = """
 V6.3 normal-path commands:
+  begin-implementation CHANGE [--approved-by IDENTITY]
+      Validate planning scope and Human Decision state, freeze the Readiness Contract, and formally enter implementation without manual lifecycle edits. HIGH/CRITICAL repository changes require explicit approval provenance.
   prepare-candidate CHANGE --readiness-batch FILE [--retain PATH=REASON] [--preexisting PATH=REASON]
       Atomically record Candidate Readiness evidence, finalize tests/scope, run the Provider-bound FULL reviewer, and stop at Candidate Human Review.
   complete-after-approval CHANGE [--verification-batch FILE]
@@ -102,6 +105,27 @@ def _batch_file(context, value: Path, key: str) -> list[dict]:
     if not all(isinstance(item, dict) for item in payload):
         raise ValueError(f"{key} batch entries must be mappings")
     return payload
+
+
+def _run_begin_implementation(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description="Enter one V6.3 Change into implementation")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    command = subparsers.add_parser("begin-implementation")
+    command.add_argument("change")
+    command.add_argument("--approved-by")
+    args = parser.parse_args(argv)
+    context = resolve_project_context(args.project)
+    try:
+        result = begin_implementation(
+            context,
+            args.change,
+            approved_by=args.approved_by,
+        )
+        _v62.render_evidence(context, args.change)
+    except (ImplementationEntryError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def _run_prepare_candidate_batch(argv: list[str]) -> None:
@@ -217,6 +241,9 @@ def main() -> None:
     argv = sys.argv[1:]
     if argv in (["--help"], ["-h"]):
         _print_combined_help()
+        return
+    if "begin-implementation" in argv:
+        _run_begin_implementation(argv)
         return
     if "prepare-candidate" in argv and "--readiness-batch" in argv:
         _run_prepare_candidate_batch(argv)
