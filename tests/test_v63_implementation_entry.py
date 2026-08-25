@@ -17,9 +17,14 @@ from implementation_entry import (  # noqa: E402
     ImplementationEntryError,
     begin_implementation,
 )
+from prepare_candidate import prepare_candidate  # noqa: E402
 from provider_task import initialize_provider_task  # noqa: E402
-from test_v62_atomic_review import load_yaml, write_yaml  # noqa: E402
-from test_v62_rc2_closure import make_project, write_manifest_lock  # noqa: E402
+from test_v62_atomic_review import fake_role_runner, load_yaml, write_yaml  # noqa: E402
+from test_v62_rc2_closure import (  # noqa: E402
+    PASS_VERDICT,
+    make_project,
+    write_manifest_lock,
+)
 
 
 def setup_change(root: Path):
@@ -64,6 +69,30 @@ class V63ImplementationEntryTests(unittest.TestCase):
             repeated = begin_implementation(context, "chg-entry")
             self.assertTrue(repeated["idempotent"])
             self.assertEqual(repeated["transitions"], [])
+
+    def test_begin_implementation_connects_cleanly_to_prepare_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, context, change = setup_change(Path(directory))
+            begin_implementation(context, "chg-entry")
+            result = prepare_candidate(
+                context,
+                "chg-entry",
+                readiness_batch=[
+                    {
+                        "criterion_id": "focused-regression",
+                        "result": "pass",
+                        "command_or_entry": "fixture focused regression",
+                        "evidence": "fixture:focused-pass",
+                    }
+                ],
+                role_runner=fake_role_runner(PASS_VERDICT),
+            )
+            self.assertEqual(result["status"], "candidate-review")
+            data = load_yaml(change / "change.yaml")
+            self.assertEqual(data["status"], "candidate-review")
+            self.assertEqual(data["review"]["status"], "pass")
+            self.assertEqual(len(data["review_history"]), 1)
+            self.assertEqual(data["user_review"]["status"], "pending")
 
     def test_unresolved_human_decision_blocks_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
