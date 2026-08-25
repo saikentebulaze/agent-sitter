@@ -341,10 +341,7 @@ class AtomicReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project, context = make_project(Path(directory))
             change = prepare_change(project, context)
-            with self.assertRaisesRegex(
-                AtomicReviewError,
-                "invalid sitter_review YAML.*reviewer attempt evidence",
-            ):
+            with self.assertRaises(AtomicReviewError) as raised:
                 run_atomic_review(
                     context,
                     "chg-one",
@@ -355,6 +352,9 @@ class AtomicReviewTests(unittest.TestCase):
                         "  remediation_route: null\n"
                     ),
                 )
+            message = str(raised.exception)
+            self.assertIn("invalid sitter_review YAML", message)
+            self.assertIn("reviewer attempt evidence", message)
 
             data = load_yaml(change / "change.yaml")
             self.assertEqual(data.get("review_history") or [], [])
